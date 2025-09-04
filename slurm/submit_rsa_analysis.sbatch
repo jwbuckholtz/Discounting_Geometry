@@ -35,25 +35,17 @@ source .venv/bin/activate
 # --- Construct the Python Command ---
 # Start with the base command
 CMD="python scripts/rsa/run_rsa_analysis.py \
-    --subject \"$SUBJECT_ID\" \
-    --analysis-type \"$ANALYSIS_TYPE\" \
-    --config \"$CONFIG_FILE\" \
-    --env \"$ENV\""
+    --subject '$SUBJECT_ID' \
+    --config '$CONFIG_FILE' \
+    --env '$ENV' \
+    --analysis-type '$ANALYSIS_TYPE'"
 
-# Add the --roi-path argument ONLY if the analysis type is 'roi'
-if [ "$ANALYSIS_TYPE" = "roi" ]; then
-    CMD="$CMD --roi-path \"$ROI_PATH\""
+if [ -n "$ROI_PATH" ]; then
+    CMD="$CMD --roi-path '$ROI_PATH'"
 fi
 
-# --- Run the RSA ---
-echo "Starting RSA for subject: $SUBJECT_ID"
-echo "Analysis Type: $ANALYSIS_TYPE"
-if [ "$ANALYSIS_TYPE" = "roi" ]; then
-    echo "ROI Path: $ROI_PATH"
-fi
-echo "Job started at: $(date)"
-
-# Execute the constructed command
+# --- Run the analysis ---
+echo "Executing command: $CMD"
 eval $CMD
 
 echo "Job finished at: $(date)"
