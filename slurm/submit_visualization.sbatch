@@ -18,6 +18,9 @@ set -e # Exit immediately if a command exits with a non-zero status.
 : "${CONFIG_FILE:="config/project_config.yaml"}"
 : "${ENV:="hpc"}"
 
+# Load the Python module to make libraries available on the compute node
+ml python/3.9
+
 echo "--- Job Details ---"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Subject ID: $SUBJECT_ID"

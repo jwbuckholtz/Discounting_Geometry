@@ -21,17 +21,22 @@
 # Variables expected from the wrapper: SUBJECT_ID, TARGET, CONFIG_FILE, ENV
 # --------------------------------------------------------------------------------
 
-# Set up the environment
+# --- Environment Setup ---
 set -e # Exit immediately if a command exits with a non-zero status.
 
-# --- Environment Activation ---
-: "${CONFIG_FILE:=config/project_config.yaml}"
-: "${ENV:=hpc}"
+# Set default values for environment variables
+: "${SUBJECT_ID:?Need to set SUBJECT_ID}"
+: "${TARGET:?Need to set TARGET}"
+: "${CONFIG_FILE:="config/project_config.yaml"}"
+: "${ENV:="hpc"}"
 
-# Activate your project's virtual environment
+# Load the Python module to make libraries available on the compute node
+ml python/3.9
+
+# Activate Conda/Venv Environment
 source .venv/bin/activate
 
-# --- Run the Decoding Analysis ---
+# --- Execute the Script ---
 echo "Starting decoding for subject: $SUBJECT_ID, target: $TARGET"
 echo "Using config file: $CONFIG_FILE"
 echo "Using environment: $ENV"

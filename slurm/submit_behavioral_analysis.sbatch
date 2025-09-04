@@ -34,8 +34,8 @@ set -e # Exit immediately if a command exits with a non-zero status.
 : "${CONFIG_FILE:=config/project_config.yaml}"
 : "${ENV:=hpc}"
 
-# TODO: Add any module load commands if necessary (e.g., for Python)
-# module load python/3.9
+# Load the Python module to make libraries available on the compute node
+ml python/3.9
 
 # Activate your project's virtual environment
 # Assumes you have created a virtual environment at the project root
