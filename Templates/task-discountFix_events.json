@@ -1,0 +1,67 @@
+{
+    "onset": {
+        "LongName": "onset",
+        "Description": "timepoint that stimulus appears on screen that matches scan timeseries",
+        "Units": "seconds"
+    },
+    "duration": {
+        "LongName": "duration",
+        "Description": "fixed period of time during which stimulus was on screen",
+        "Units": "seconds"
+    },
+    "choice": {
+        "LongName": "choice",
+        "Description": "which case participant chose",
+        "Levels": {
+            "smaller_sooner": "chose to get smaller amount sooner",
+            "larger_later": "chose to get larger amount later"
+        }
+    },
+    "experiment_exp_id": {
+        "LongName": "experiment_exp_id",
+        "Description": "indicates which task was performed"
+    },
+    "key_press": {
+        "LongName": "key_press",
+        "Description": "which key was pressed",
+        "Units": "key_code",
+        "Levels": {
+            "89": "y",
+            "71": "g",
+            "-1": "no response"
+        },
+        "Notes": "89 was coded for index finger responses, 71 for middle finger responses"
+    },
+    "large_amount": {
+        "LongName": "large_amount",
+        "Description": "amount to be received later",
+        "Units": "dollars"
+    },
+    "later_delay": {
+        "LongName": "later_delay",
+        "Description": "amount of days until larger amount is received",
+        "Units": "days"
+    },
+    "response_time": {
+        "LongName": "response_time",
+        "Units": "seconds"
+    },
+    "small_amount": {
+        "LongName": "small_amount",
+        "Description": "amount to be received sooner",
+        "Units": "dollars",
+        "Notes": "fixed at $20"
+    },
+    "trial_type": {
+        "LongName": "trial_type",
+        "Description": "which choice was made",
+        "Levels": {
+            "smaller_sooner": "chose to get smaller amount sooner",
+            "larger_later": "chose to get larger amount later"
+        }
+    },
+    "worker_id": {
+        "LongName": "worker_id",
+        "Description": "subject identifier"
+    }
+}

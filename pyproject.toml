@@ -1,0 +1,30 @@
+[project]
+name = "DecodingDD"
+version = "0.1.0"
+description = "Analysis pipeline for the Delay Discounting task."
+authors = [{ name = "Joshua Buckholtz", email = "joshua.buckholtz@stanford.edu" }]
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "numpy",
+    "scipy",
+    "nilearn",
+    "nibabel",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "pyyaml",
+    "pytest",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

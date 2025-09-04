@@ -1,0 +1,34 @@
+# BIDS data and derivatives - DO NOT TRACK
+/data/
+/derivatives/
+
+# Python environment and cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+*.egg-info/
+.ipynb_checkpoints
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+
+# Data files (we don't want to track large data in Git)
+*.nii.gz
+*.tsv
+*.csv
+*.numbers
+
+# SLURM output files
+slurm-*.out
+
+# Credentials and secrets
+.secrets/

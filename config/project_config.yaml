@@ -1,0 +1,21 @@
+# -----------------------------------------------------------------------------
+# Configuration file for the DecodingDD project
+# -----------------------------------------------------------------------------
+# This file centralizes paths for different computing environments.
+# You can select an environment (e.g., 'local', 'hpc') when running a script.
+# -----------------------------------------------------------------------------
+
+local:
+  # Paths for running on your local machine
+  bids_dir: data
+  derivatives_dir: derivatives
+  fmriprep_dir: /Users/joshuabuckholtz/Data/UH1_Aim1/Derivatives/fMRIPrepped
+  onsets_dir: /Users/joshuabuckholtz/Data/UH1_Aim1/Onsets
+
+hpc:
+  # Paths for running on the Stanford OAK HPC cluster
+  # TODO: Update these paths to your specific OAK directories
+  bids_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/data
+  derivatives_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/derivatives
+  fmriprep_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/derivatives/fmriprep
+  onsets_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/onsets
