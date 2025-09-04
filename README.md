@@ -43,7 +43,7 @@ This repository is organized to clearly separate code, data, configuration, and 
 ```
 
 - **`config/`**: Contains `project_config.yaml` for specifying file paths for different execution environments (e.g., `local`, `hpc`).
-- **`data/`**: Intended for raw BIDS-formatted data. This directory is included in `.gitignore` to prevent large data files from being committed to the repository.
+- **`data/`**: Intended for local testing with raw BIDS-formatted data. This directory is included in `.gitignore` to prevent large data files from being committed to the repository.
 - **`derivatives/`**: The primary output directory for all generated files, including behavioral results, beta maps, and analysis outputs. Also gitignored.
 - **`scripts/`**: Contains all Python scripts, organized into subdirectories based on their analysis stage (e.g., `behavioral`, `modeling`).
 - **`slurm/`**: Holds SLURM `.sbatch` templates and the `.sh` wrapper scripts used to submit jobs to the HPC cluster. Log files from SLURM jobs are also saved here.
