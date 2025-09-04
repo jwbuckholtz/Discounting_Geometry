@@ -4,6 +4,7 @@
 
 #AI coding agent 
 /neuro-agent/
+
 # Python environment and cache
 .venv/
 __pycache__/
@@ -31,6 +32,9 @@ Thumbs.db
 
 # SLURM output files
 slurm-*.out
+
+# SLURM output logs
+slurm/logs/
 
 # Credentials and secrets
 .secrets/
