@@ -255,45 +255,110 @@ To improve efficiency, the `scripts/` directory contains wrapper scripts to run 
 
 These scripts are a convenient way to process a single subject completely before scaling up to the full dataset on the HPC.
 
-## 7. HPC Execution with SLURM
+## 7. HPC Execution with Sherlock (SLURM)
 
-This pipeline is designed to be scaled up to run on a high-performance computing (HPC) cluster using the SLURM workload manager. The `slurm/` directory contains wrapper scripts (`submit_all_*.sh`) that automate the process of submitting jobs for all subjects found in your BIDS directory.
+This pipeline is designed to be scaled up to run on a high-performance computing (HPC) cluster like Stanford's Sherlock, which uses the SLURM workload manager. The `slurm/` directory contains wrapper scripts (`submit_all_*.sh`) that automate the process of submitting jobs for all subjects found in your BIDS directory.
 
-### Prerequisites
+### Step 1: Initial Setup on Sherlock (One-Time)
 
-1.  Ensure this project repository is cloned on the HPC.
-2.  Set up the Python environment using `uv` on the HPC, following the same steps as in the "Setup and Installation" section.
-3.  Make sure you have correctly filled out the `hpc` section of your `config/project_config.yaml` file with the absolute paths to your data on the cluster.
+Follow these steps the first time you set up the project on Sherlock.
 
-### Submitting Jobs
+1.  **Log in to Sherlock:**
+    ```bash
+    ssh your_sunet_id@sherlock.stanford.edu
+    ```
 
-To submit jobs, you run the corresponding `submit_all_*.sh` script. These scripts will find all `sub-*` directories in your BIDS directory and submit an `sbatch` job for each one.
+2.  **Load Required Modules:**
+    Sherlock uses a module system. While our Python environment is self-contained, you may need to load `git` if it's not available by default.
+    ```bash
+    ml git
+    ```
 
-**Important:** Before running, make sure the wrapper scripts are executable:
-```bash
-chmod +x slurm/submit_all_behavioral.sh
-chmod +x slurm/submit_all_modeling.sh
-chmod +x slurm/submit_all_decoding.sh
-chmod +x slurm/submit_all_rsa.sh
-```
+3.  **Clone the Repository:**
+    Clone the project into your desired directory (e.g., your `/home/` or `/oak/` directory).
+    ```bash
+    git clone <repository_url>
+    cd DecodingDD
+    ```
 
-**Example Commands:**
+4.  **Set up the Python Environment:**
+    Follow the same setup steps as for your local machine, using a version of Python available on Sherlock (Python 3.9 is recommended).
+    ```bash
+    # Load a python module if needed to get python3.9
+    ml python/3.9
 
-```bash
-# Submit behavioral analysis for all subjects
-./slurm/submit_all_behavioral.sh
+    # Create the virtual environment
+    python3.9 -m venv .venv
+    
+    # Activate the environment
+    source .venv/bin/activate
 
-# Submit LSS modeling for all subjects
-./slurm/submit_all_modeling.sh
+    # Install uv and sync dependencies
+    pip install uv
+    uv pip sync pyproject.toml
+    ```
 
-# Submit decoding analysis for all subjects and all target variables
-./slurm/submit_all_decoding.sh
+### Step 2: Configuration for HPC
 
-# Submit whole-brain RSA for all subjects
-./slurm/submit_all_rsa.sh --analysis-type whole_brain
+This is the most critical step for running on the cluster.
 
-# Submit searchlight RSA for all subjects
-./slurm/submit_all_rsa.sh --analysis-type searchlight
-```
+1.  **Edit the `project_config.yaml` file:**
+    Open `config/project_config.yaml` and carefully fill out the `hpc` section with the correct **absolute paths** to your data directories on Sherlock. These will likely be paths in `/oak/` or `/scratch/`.
 
-The scripts accept command-line arguments to specify the configuration file and environment, which default to the correct values (`--config config/project_config.yaml` and `--env hpc`). The SLURM output and error logs will be saved to the `slurm/` directory.
+    **Example `hpc` section:**
+    ```yaml
+    hpc:
+      bids_dir: /oak/stanford/groups/your_group/data/bids
+      derivatives_dir: /oak/stanford/groups/your_group/derivatives
+      fmriprep_dir: /oak/stanford/groups/your_group/derivatives/fmriprep
+      onsets_dir: /oak/stanford/groups/your_group/data/onsets
+    ```
+
+2.  **Make Submission Scripts Executable:**
+    Ensure all the SLURM wrapper scripts are executable. You only need to do this once.
+    ```bash
+    chmod +x slurm/submit_all_*.sh
+    ```
+
+### Step 3: Submitting and Monitoring Jobs
+
+Run the analysis pipeline sequentially by submitting the wrapper scripts. **You must wait for all jobs from one step to finish before submitting the next step.**
+
+1.  **Submit Behavioral Analysis:**
+    ```bash
+    ./slurm/submit_all_behavioral.sh
+    ```
+
+2.  **Monitor Progress:**
+    Check the status of your jobs using `squeue`.
+    ```bash
+    squeue -u your_sunet_id
+    ```
+    Wait until this command shows no more jobs from the previous step before proceeding. The SLURM output and error logs (e.g., `slurm-behavioral-sub-s061.out`) will be saved to the `slurm/` directory.
+
+3.  **Submit LSS Modeling:**
+    Once all behavioral jobs are complete:
+    ```bash
+    ./slurm/submit_all_modeling.sh
+    ```
+
+4.  **Submit MVPA and RSA Analyses:**
+    Once all LSS modeling jobs are complete, you can run the decoding and similarity analyses. These can be run in parallel.
+    ```bash
+    # Submit decoding for all subjects and targets
+    ./slurm/submit_all_decoding.sh
+
+    # Submit searchlight RSA for all subjects
+    ./slurm/submit_all_rsa.sh --analysis-type searchlight
+    ```
+
+5.  **Submit Visualization Jobs (Optional):**
+    Once all the prerequisite jobs are complete, you can generate the t-SNE plots.
+    ```bash
+    ./slurm/submit_all_visualizations.sh
+    ```
+
+### Step 4: Checking Results
+
+-   **Logs:** The primary place to check for progress and errors is the `.out` and `.err` files generated in the `slurm/` directory.
+-   **Derivatives:** The final output files will be located in the `derivatives_dir` you specified in the configuration file on the HPC.
