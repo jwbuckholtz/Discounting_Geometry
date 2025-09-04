@@ -15,7 +15,7 @@ local:
 hpc:
   # Paths for running on the Stanford OAK HPC cluster
   # TODO: Update these paths to your specific OAK directories
-  bids_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/data
+  bids_dir: /oak/stanford/groups/russpold/data/uh2/aim1/BIDS/
   derivatives_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/derivatives
-  fmriprep_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/derivatives/fmriprep
-  onsets_dir: /oak/stanford/groups/YOUR_GROUP/YOUR_PROJECT/onsets
+  fmriprep_dir: /oak/stanford/groups/russpold/data/uh2/aim1/derivatives/fmriprep/
+  onsets_dir: /oak/stanford/groups/russpold/data/uh2/aim1/behavioral_data/event_files/
