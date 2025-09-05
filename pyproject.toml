@@ -13,10 +13,12 @@ dependencies = [
     "scikit-learn",
     "matplotlib",
     "seaborn",
+    "uv",
     "pyyaml",
     "pytest",
     "pytz",
     "python-dateutil",
+    "six",
 ]
 
 [project.optional-dependencies]
