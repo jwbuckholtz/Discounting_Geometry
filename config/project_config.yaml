@@ -58,9 +58,25 @@ analysis_params:
       - SVdiff
   
   mvpa:
-    estimator: 'svc'
-    scoring: 'accuracy'
-    cv_folds: 5 # Specific to MVPA decoding
+    # A list of all target variables to decode
+    targets:
+      - choice       # Will be run as classification
+      - SVchosen     # Will be run as regression
+      - SVunchosen   # Will be run as regression
+      - SVsum        # Will be run as regression
+      - SVdiff       # Will be run as regression
+    
+    # Parameters for classification tasks
+    classification:
+      estimator: 'svc'
+      scoring: 'accuracy'
+      cv_folds: 5
+      
+    # Parameters for regression tasks
+    regression:
+      estimator: 'svr'
+      scoring: 'r2'
+      cv_folds: 5
   
   behavioral_modeling:
     k_bounds: [0.000001, 1.0]

@@ -13,6 +13,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $(hostname)"
 echo "Submitted from: $(pwd)"
 echo "Subject ID: $SUBJECT_ID"
+echo "Target: $TARGET"
 echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
@@ -21,8 +22,7 @@ source /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/setup.sh
 # --- Command ---
 python scripts/mvpa/run_decoding_analysis.py \
     $SUBJECT_ID \
-    $BIDS_DIR \
     $DERIVATIVES_DIR \
-    $MASK_PATH \
+    --target $TARGET \
     --config $CONFIG_FILE \
     --env $ENV

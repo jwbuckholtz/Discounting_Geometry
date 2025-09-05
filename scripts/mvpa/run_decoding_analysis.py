@@ -167,77 +167,84 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     logging.info(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
 
 
-def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir: Path, mask_path: str, space: str, params: Dict[str, Any]):
+def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: str, params: Dict[str, Any]):
     """
-    Runs the decoding analysis for a single subject.
-
-    Args:
-        subject_id: The ID of the subject.
-        bids_dir: The path to the BIDS directory.
-        derivatives_dir: The path to the derivatives directory.
-        mask_path: The path to the brain mask.
-        space: The space of the data.
+    Runs the decoding analysis for a single subject and a single target variable.
     """
     setup_logging()
-    logging.info(f"Running decoding analysis for sub-{subject_id}")
+    logging.info(f"Running decoding for sub-{subject_id}, target: {target}")
 
     # --- 1. Load Data ---
-    lss_dir = derivatives_dir / 'lss' / f"sub-{subject_id}"
-    events_file = bids_dir / f"sub-{subject_id}" / 'func' / f"sub-{subject_id}_task-discounting_events.tsv"
+    lss_betas_path = find_lss_beta_maps(derivatives_dir, subject_id)
+    events_path = find_behavioral_sv_file(derivatives_dir, subject_id)
+    beta_maps_img = image.load_img(lss_betas_path)
+    events_df = pd.read_csv(events_path, sep='\t')
     
-    events_df = pd.read_csv(events_file, sep='\t')
-    beta_maps = sorted(list(lss_dir.glob("*.nii.gz")))
+    # --- 2. Determine Analysis Type & Get Parameters ---
+    if target not in events_df.columns:
+        raise ValueError(f"Target '{target}' not found in events file.")
     
-    # Filter for high vs low value trials
-    conditions = events_df[events_df['trial_type'].isin(['high_value', 'low_value'])]
-    y = conditions['trial_type'].values
+    is_categorical = events_df[target].dtype == 'object' or events_df[target].nunique() < 3
     
-    # Match beta maps to the filtered conditions
-    trial_indices = conditions['trial_index'].values
-    X_paths = [str(p) for p in beta_maps if int(p.stem.split('_trial-')[1].split('_')[0]) in trial_indices]
+    if is_categorical:
+        analysis_params = params['mvpa']['classification']
+        model = SVC(kernel='linear', class_weight='balanced')
+        logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
+    else:
+        analysis_params = params['mvpa']['regression']
+        model = SVR(kernel='linear')
+        logging.info(f"Treating '{target}' as a REGRESSION target.")
+        
+    # --- 3. Prepare Data ---
+    y = events_df[target].values
+    groups = events_df['run'].values if 'run' in events_df.columns else None
+    valid_trials = ~pd.isna(y)
+    
+    X_img = image.index_img(beta_maps_img, valid_trials)
+    y = y[valid_trials]
+    if groups is not None:
+        groups = groups[valid_trials]
 
-    # --- 2. Run Decoding ---
+    # --- 4. Run Decoding ---
+    # We use the whole-brain mask for this simplified script
+    _, mask_path, _ = find_fmriprep_files(derivatives_dir / 'fmriprep', subject_id)
+    
     decoder = Decoder(
-        estimator=params['mvpa']['estimator'],
+        estimator=model,
         mask=mask_path,
         standardize=True,
-        scoring=params['mvpa']['scoring'],
-        cv=params['mvpa']['cv_folds']
+        scoring=analysis_params['scoring'],
+        cv=analysis_params['cv_folds']
     )
-    decoder.fit(X_paths, y)
+    decoder.fit(X_img, y, groups=groups)
     
-    # --- 3. Save Results ---
-    output_dir = derivatives_dir / "mvpa"
+    # --- 5. Save Results ---
+    output_dir = derivatives_dir / "mvpa" / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"sub-{subject_id}_decoding-scores.csv"
+    output_path = output_dir / f"{subject_id}_target-{target}_decoding-scores.csv"
     
-    scores_df = pd.DataFrame({'score': decoder.cv_scores_['high_value'], 'fold': np.arange(1, params['mvpa']['cv_folds'] + 1)})
+    scores = decoder.cv_scores_[list(decoder.cv_scores_.keys())[0]] if is_categorical else decoder.cv_scores_
+    scores_df = pd.DataFrame({'score': scores, 'fold': np.arange(1, len(scores) + 1)})
     scores_df.to_csv(output_path, index=False)
-
-    logging.info(f"Decoding scores saved to {output_path}")
-
+    logging.info(f"Decoding scores saved to {output_path}. Mean score: {np.mean(scores):.3f}")
 
 def main():
     """Main function to run the decoding analysis."""
     parser = argparse.ArgumentParser(description="Run MVPA decoding analysis for a single subject.")
-    parser.add_argument("subject_id", help="Subject ID (e.g., '001').")
-    parser.add_argument("bids_dir", help="Path to the BIDS directory.")
+    parser.add_argument("subject_id", help="Subject ID (e.g., 'sub-01').")
     parser.add_argument("derivatives_dir", help="Path to the derivatives directory.")
-    parser.add_argument("mask_path", help="Path to the brain mask.")
-    parser.add_argument("--space", default="MNI152NLin2009cAsym", help="The space of the data.")
+    parser.add_argument("--target", required=True, help="The target variable to decode from the events file.")
+    parser.add_argument("--config", default='config/project_config.yaml', help="Path to the project config file.")
+    parser.add_argument("--env", default='hpc', choices=['local', 'hpc'], help="Environment from the config file.")
     args = parser.parse_args()
 
-    # Load configuration to get analysis params
-    config = load_config('config/project_config.yaml')
-    analysis_params = config['analysis_params']
-
+    config = load_config(args.config)
+    
     run_subject_level_decoding(
         subject_id=args.subject_id,
-        bids_dir=Path(args.bids_dir),
         derivatives_dir=Path(args.derivatives_dir),
-        mask_path=args.mask_path,
-        space=args.space,
-        params=analysis_params
+        target=args.target,
+        params=config['analysis_params']
     )
 
 if __name__ == "__main__":
