@@ -44,25 +44,18 @@ def create_neural_rdm(beta_maps_img, mask_img):
     Args:
         beta_maps_img: The 4D Nifti image of single-trial beta maps.
         mask_img: The brain mask Nifti image.
-        valid_trials_mask (np.array): A boolean mask of valid trials.
 
     Returns:
         np.array: A square, symmetric neural RDM.
     """
-    # --- 1. Filter and Mask the Data ---
-    # The valid_trials_mask is not passed as an argument here,
-    # as it's not directly used in this function's logic.
-    # The function assumes the data is already filtered by the mask_img.
-    beta_maps_valid = image.index_img(beta_maps_img, mask_img.get_data() > 0) # Use mask_img to get data
-
     # Use Nilearn's NiftiMasker to extract the voxel data for each trial
+    # This is the correct way to apply a mask to 4D data.
     masker = NiftiMasker(mask_img=mask_img, standardize=True)
-    voxel_data = masker.fit_transform(beta_maps_valid)
+    voxel_data = masker.fit_transform(beta_maps_img)
     
-    # --- 2. Calculate the RDM ---
-    # The result is a (n_trials, n_voxels) array
-    # We will now calculate the dissimilarity between each pair of rows (trials)
-    # The metric 'correlation' computes 1 - Pearson correlation
+    # The result is a (n_trials, n_voxels) array.
+    # We will now calculate the dissimilarity between each pair of rows (trials).
+    # The metric 'correlation' computes 1 - Pearson correlation.
     neural_rdm = squareform(pdist(voxel_data, metric='correlation'))
     
     print(f"Created neural RDM with shape: {neural_rdm.shape}")
@@ -333,19 +326,23 @@ def main():
     if args.analysis_type in ['whole_brain', 'searchlight']:
         # --- Handle single-mask analyses ---
         output_dir = derivatives_dir / 'rsa' / args.subject
+        
+        # Filter beta maps to only include valid trials *before* analysis
+        beta_maps_valid = image.index_img(beta_maps_img, valid_trials_mask)
+
         if args.analysis_type == 'searchlight':
             # --- Run Searchlight RSA ---
             print("\n--- Running Searchlight RSA ---")
-            searchlight_results = run_searchlight_rsa(beta_maps_img, mask_img, theoretical_rdms, valid_trials_mask)
+            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms, valid_trials_mask)
             save_searchlight_maps(args.subject, searchlight_results, output_dir)
             print("Searchlight analysis complete.")
         else: # whole_brain
             # --- Run Whole-Brain RSA ---
             print("\n--- Running Whole-Brain RSA ---")
-            neural_rdm = create_neural_rdm(beta_maps_img, mask_img)
+            neural_rdm = create_neural_rdm(beta_maps_valid, mask_img)
+            
             # For whole-brain, we will run the cross-validated RSA
             masker = NiftiMasker(mask_img=mask_img, standardize=True)
-            beta_maps_valid = image.index_img(beta_maps_img, valid_trials_mask)
             voxel_data = masker.fit_transform(beta_maps_valid)
             rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms)
             save_results(args.subject, rsa_results, output_dir, 'whole_brain')
