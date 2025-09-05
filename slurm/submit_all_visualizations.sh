@@ -32,11 +32,10 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# --- Path Resolution ---
-# If BIDS_DIR is not provided via command line, extract it from the config file
+# --- Read BIDS directory from config if not provided ---
 if [ -z "$BIDS_DIR_ARG" ]; then
-    # This command uses Python's YAML parser to safely extract the path
-    BIDS_DIR=$(python -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE'))['$ENV']['bids_dir'])")
+    # Use python to parse the yaml file to avoid adding a shell-based yaml parser dependency
+    BIDS_DIR=$(python -c "import yaml; f = open('$CONFIG_FILE'); config = yaml.safe_load(f); print(config['$ENV']['bids_dir'])")
 else
     BIDS_DIR=$BIDS_DIR_ARG
 fi

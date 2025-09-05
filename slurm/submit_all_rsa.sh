@@ -12,7 +12,7 @@
 # --------------------------------------------------------------------------------
 
 # --- Default Configuration ---
-BIDS_DIR="data"
+BIDS_DIR="" # This will be read from the config file
 CONFIG_FILE="config/project_config.yaml"
 ENV="hpc"
 SBATCH_TEMPLATE="slurm/submit_rsa_analysis.sbatch"
@@ -28,6 +28,12 @@ while [[ "$#" -gt 0 ]]; do
     esac
     shift
 done
+
+# --- Read BIDS directory from config if not provided ---
+if [ -z "$BIDS_DIR" ]; then
+    # Use python to parse the yaml file to avoid adding a shell-based yaml parser dependency
+    BIDS_DIR=$(python -c "import yaml; f = open('$CONFIG_FILE'); config = yaml.safe_load(f); print(config['$ENV']['bids_dir'])")
+fi
 
 # --- Validation ---
 if [ -z "$ANALYSIS_TYPE" ]; then
