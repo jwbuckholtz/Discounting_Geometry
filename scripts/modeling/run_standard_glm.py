@@ -42,34 +42,38 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
 
     # --- Manually Create Parametric Regressors ---
     n_scans = image.load_img(bold_imgs[0]).shape[3]
-    modulators = ['choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']
+    # Use the modulators from the config file
+    modulators = params['glm']['contrasts']
     
     # Create a copy to avoid modifying the original
     run_confounds = confounds_dfs[0].copy()
     
     for mod in modulators:
+        # For the main 'decision' event, we convolve a vector of ones
+        if mod == 'decision':
+            events_df['decision'] = 1 
+        
         if mod in events_df.columns:
             convolved_reg = convolve_with_hrf(events_df, mod, n_scans, params['t_r'])
             run_confounds[mod] = convolved_reg
         else:
-            raise ValueError(f"Modulator column '{mod}' not found.")
+            logging.warning(f"Modulator column '{mod}' not found in events_df. Skipping.")
             
-    # --- Simplify Events for GLM ---
-    glm_events = events_df[['onset', 'duration']].copy()
-    glm_events['trial_type'] = 'decision'
-    
     glm = FirstLevelModel(
         t_r=params['t_r'],
         slice_time_ref=params['slice_time_ref'],
+        hrf_model=params['glm']['hrf_model'],
+        drift_model=params['glm']['drift_model'],
         mask_img=mask_file,
         signal_scaling=False,
         smoothing_fwhm=params['smoothing_fwhm']
     )
 
-    glm.fit(bold_imgs, events=glm_events, confounds=[run_confounds])
+    # All regressors are now in the confounds, so no events are needed
+    glm.fit(bold_imgs, events=None, confounds=[run_confounds])
 
     # --- Define and Compute Contrasts ---
-    contrasts = {'decision': 'decision', **{mod: mod for mod in modulators}}
+    contrasts = {c: c for c in modulators if c in run_confounds.columns}
 
     for contrast_id, contrast_formula in contrasts.items():
         try:

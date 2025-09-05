@@ -32,5 +32,37 @@ analysis_params:
   smoothing_fwhm: 5.0
   
   # Cross-validation parameters
-  n_splits: 5
+  n_splits: 5 # General CV splits, can be overridden by specific analyses
   random_state: 42
+
+  # --- Task-Specific Parameters ---
+  glm:
+    hrf_model: 'glover'
+    drift_model: 'cosine'
+    contrasts:
+      - decision
+      - choice
+      - SVchosen
+      - SVunchosen
+      - SVsum
+      - SVdiff
+  
+  rsa:
+    searchlight_radius: 8
+    models:
+      - choice
+      - later_delay
+      - SVchosen
+      - SVunchosen
+      - SVsum
+      - SVdiff
+  
+  mvpa:
+    estimator: 'svc'
+    scoring: 'accuracy'
+    cv_folds: 5 # Specific to MVPA decoding
+  
+  behavioral_modeling:
+    k_bounds: [0.000001, 1.0]
+    tau_bounds: [0.000001, 5.0]
+    initial_params: [0.01, 1.0]

@@ -167,7 +167,7 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     logging.info(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
 
 
-def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir: Path, mask_path: str, space: str):
+def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir: Path, mask_path: str, space: str, params: Dict[str, Any]):
     """
     Runs the decoding analysis for a single subject.
 
@@ -198,11 +198,11 @@ def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir:
 
     # --- 2. Run Decoding ---
     decoder = Decoder(
-        estimator='svc',
+        estimator=params['mvpa']['estimator'],
         mask=mask_path,
         standardize=True,
-        scoring='accuracy',
-        cv=5
+        scoring=params['mvpa']['scoring'],
+        cv=params['mvpa']['cv_folds']
     )
     decoder.fit(X_paths, y)
     
@@ -211,7 +211,7 @@ def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"sub-{subject_id}_decoding-scores.csv"
     
-    scores_df = pd.DataFrame({'score': decoder.cv_scores_['high_value'], 'fold': np.arange(1, 6)})
+    scores_df = pd.DataFrame({'score': decoder.cv_scores_['high_value'], 'fold': np.arange(1, params['mvpa']['cv_folds'] + 1)})
     scores_df.to_csv(output_path, index=False)
 
     logging.info(f"Decoding scores saved to {output_path}")
@@ -227,12 +227,17 @@ def main():
     parser.add_argument("--space", default="MNI152NLin2009cAsym", help="The space of the data.")
     args = parser.parse_args()
 
+    # Load configuration to get analysis params
+    config = load_config('config/project_config.yaml')
+    analysis_params = config['analysis_params']
+
     run_subject_level_decoding(
         subject_id=args.subject_id,
         bids_dir=Path(args.bids_dir),
         derivatives_dir=Path(args.derivatives_dir),
         mask_path=args.mask_path,
-        space=args.space
+        space=args.space,
+        params=analysis_params
     )
 
 if __name__ == "__main__":

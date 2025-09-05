@@ -193,7 +193,7 @@ class RSASearchlightEstimator(BaseEstimator):
         return self
 
 
-def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, theoretical_rdms: Dict[str, np.ndarray]) -> Dict[str, nib.Nifti1Image]:
+def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, theoretical_rdms: Dict[str, np.ndarray], params: Dict[str, Any]) -> Dict[str, nib.Nifti1Image]:
     """
     Performs a searchlight RSA using a custom scikit-learn estimator.
     """
@@ -211,7 +211,7 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Imag
     searchlight = SearchLight(
         mask_img,
         estimator=estimator,
-        radius=8,
+        radius=params['rsa']['searchlight_radius'],
         n_jobs=-1,
         verbose=10
     )
@@ -364,8 +364,11 @@ def main() -> None:
     # 2. Create theoretical RDMs (do this once)
     # For each variable, we ensure we only use non-NaN trials
     theoretical_rdms = {}
-    for var in ['choice', 'later_delay', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']:
+    for var in analysis_params['rsa']['models']:
         # Create a specific mask for the current variable, combined with the base mask
+        if var not in events_df.columns:
+            logging.warning(f"Variable '{var}' from config not in events data. Skipping.")
+            continue
         var_mask = events_df[var].notna().values
         combined_mask = base_valid_trials_mask & var_mask
         
@@ -383,7 +386,7 @@ def main() -> None:
         if args.analysis_type == 'searchlight':
             # --- Run Searchlight RSA ---
             logging.info("\n--- Running Searchlight RSA ---")
-            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms)
+            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms, analysis_params)
             save_searchlight_maps(args.subject, searchlight_results, output_dir)
             logging.info("Searchlight analysis complete.")
         else: # whole_brain

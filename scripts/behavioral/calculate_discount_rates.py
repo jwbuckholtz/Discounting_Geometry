@@ -46,12 +46,13 @@ def choice_probability(params: Tuple[float, float], S: np.ndarray, L: np.ndarray
     prob_later = 1 / (1 + np.exp(-(sv_later - sv_sooner) / tau))
     return prob_later
 
-def fit_discount_rate(data: pd.DataFrame) -> Dict[str, float]:
+def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
     """
     Fits the hyperbolic discounting model to behavioral data to estimate k and tau.
 
     Args:
         data (pd.DataFrame): DataFrame with behavioral data for a single subject.
+        params (dict): Dictionary of modeling parameters from the config file.
 
     Returns:
         dict: A dictionary containing the fitted parameters and model fit statistics.
@@ -71,13 +72,14 @@ def fit_discount_rate(data: pd.DataFrame) -> Dict[str, float]:
     D = data['later_delay'].values
     choices = (data['choice'] == 'larger_later').astype(int).values
 
-    # Initial guesses for k and tau
-    initial_params = [0.01, 1.0]
+    # Parameters from config
+    initial_params = params['initial_params']
+    bounds = [tuple(params['k_bounds']), tuple(params['tau_bounds'])]
 
     # Minimize the negative log-likelihood using a more robust method
     result = minimize(neg_log_likelihood, initial_params, args=(S, L, D, choices),
                       method='L-BFGS-B',
-                      bounds=[(1e-6, 1.0), (1e-6, 5.0)])
+                      bounds=bounds)
 
     if not result.success:
         logging.warning(f"Optimization failed. Reason: {result.message}")
@@ -132,7 +134,7 @@ def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
 
     return data
 
-def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Path) -> Dict[str, Any]:
+def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Path, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Processes all behavioral data for a single subject, handling multiple runs.
     """
@@ -159,7 +161,7 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     data = pd.concat(all_runs_data, ignore_index=True)
 
     # Fit the discount rate and temperature using data from all runs
-    fit_results = fit_discount_rate(data)
+    fit_results = fit_discount_rate(data, params)
     k = fit_results['k']
 
     # Calculate subjective values
@@ -198,6 +200,7 @@ def main() -> None:
     bids_dir = Path(args.bids_dir) if args.bids_dir else Path(env_config['bids_dir'])
     derivatives_dir = Path(args.derivatives_dir) if args.derivatives_dir else Path(env_config['derivatives_dir'])
     onsets_dir = Path(env_config['onsets_dir'])
+    analysis_params = config['analysis_params']['behavioral_modeling']
 
     # Add a check to ensure the BIDS and Onsets directories exist
     if not bids_dir.is_dir():
@@ -214,7 +217,7 @@ def main() -> None:
     # --- Main processing loop ---
     all_fit_results = []
     for subject_id in subjects_to_process:
-        subject_results = process_subject_data(subject_id, onsets_dir, derivatives_dir)
+        subject_results = process_subject_data(subject_id, onsets_dir, derivatives_dir, analysis_params)
         if subject_results:
             all_fit_results.append(subject_results)
 
