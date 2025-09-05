@@ -1,55 +1,22 @@
 #!/bin/bash
-#
-#SBATCH --job-name=behavioral_analysis
-#SBATCH --output=slurm/logs/behavioral_analysis_%j.out
-#SBATCH --error=slurm/logs/behavioral_analysis_%j.err
-#
-# --------------------------------------------------------------------------------
-# Resource Requests
-# --------------------------------------------------------------------------------
-#
-#SBATCH --time=00:30:00  # Wall time limit (hh:mm:ss)
-#SBATCH --nodes=1        # Number of nodes
-#SBATCH --ntasks=1       # Number of tasks (usually 1 unless using MPI)
-#SBATCH --cpus-per-task=2 # Number of CPUs per task
-#SBATCH --mem=4G         # Memory per node (e.g., 4G, 8G, 16G)
-#
-# --------------------------------------------------------------------------------
-# Job Script
-# --------------------------------------------------------------------------------
-#
-# This script is a template for submitting a single subject's behavioral analysis.
-# The following variables are expected to be passed from the wrapper script:
-# - SUBJECT_ID: The ID of the subject to process.
-# - CONFIG_FILE: The path to the project configuration file.
-# - ENV: The environment to use from the config file ('local' or 'hpc').
-# --------------------------------------------------------------------------------
+#SBATCH --job-name=behavioral
+#SBATCH --output=logs/behavioral_%j.out
+#SBATCH --error=logs/behavioral_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem-per-cpu=4G
+#SBATCH --account=russpold
+#SBATCH --partition=russpold
 
-# Set up the environment
-set -e # Exit immediately if a command exits with a non-zero status.
+# --- Print job submission info ---
+echo "Job ID: $SLURM_JOB_ID"
+echo "Running on host: $(hostname)"
+echo "Submitted from: $(pwd)"
 
-# --- Module loading and environment activation ---
-# Use default values for variables if they are not set.
-# This allows the script to be run standalone for testing.
-: "${CONFIG_FILE:=config/project_config.yaml}"
-: "${ENV:=hpc}"
+# --- Setup ---
+source /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/setup.sh
+# --- Command ---
+# This script processes all subjects found in the BIDS directory.
+python scripts/behavioral/calculate_discount_rates.py --env hpc
 
-# Load the Python module to make libraries available on the compute node
-ml python/3.9
-
-# Activate your project's virtual environment
-# Assumes you have created a virtual environment at the project root
-source .venv/bin/activate
-
-# --- Run the analysis ---
-echo "Starting behavioral analysis for subject: $SUBJECT_ID"
-echo "Using config file: $CONFIG_FILE"
-echo "Using environment: $ENV"
-echo "Job started at: $(date)"
-
-python scripts/behavioral/calculate_discount_rates.py \
-    --subject "$SUBJECT_ID" \
-    --config "$CONFIG_FILE" \
-    --env "$ENV"
-
-echo "Job finished at: $(date)"
+echo "Behavioral analysis complete."

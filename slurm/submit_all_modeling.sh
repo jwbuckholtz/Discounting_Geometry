@@ -1,11 +1,10 @@
 #!/bin/bash
-# Submits a SLURM job for each subject to run the RSA (whole-brain and searchlight).
+# Submits a SLURM job for each subject to run the first-level models (LSS and Standard).
 
 # --- Configuration ---
 CONFIG_FILE="config/project_config.yaml"
 ENV="hpc"
-SBATCH_TEMPLATE="slurm/templates/submit_rsa_template.sbatch"
-ANALYSIS_TYPES=("whole_brain" "searchlight")
+SBATCH_TEMPLATE="slurm/templates/submit_modeling_template.sbatch"
 
 # --- Read paths from config ---
 BIDS_DIR=$(python -c "import yaml; f=open('$CONFIG_FILE'); config=yaml.safe_load(f); print(config['$ENV']['bids_dir'])")
@@ -19,12 +18,10 @@ for subject_dir in "$BIDS_DIR"/sub-*/; do
     if [ -d "$subject_dir" ]; then
         subject_id=$(basename "$subject_dir")
         
-        for analysis_type in "${ANALYSIS_TYPES[@]}"; do
-            echo "Submitting RSA job for subject: $subject_id, analysis: $analysis_type"
-            sbatch --export=ALL,SUBJECT_ID="$subject_id",ANALYSIS_TYPE="$analysis_type",CONFIG_FILE="$CONFIG_FILE",ENV="$ENV" \
-                   "$SBATCH_TEMPLATE"
-        done
+        echo "Submitting modeling job for subject: $subject_id"
+        sbatch --export=ALL,SUBJECT_ID="$subject_id",CONFIG_FILE="$CONFIG_FILE",ENV="$ENV" \
+               "$SBATCH_TEMPLATE"
     fi
 done
 
-echo "All RSA jobs submitted."
+echo "All modeling jobs submitted."
