@@ -114,7 +114,9 @@ def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categori
     labels_valid = labels[valid_trials_mask]
 
     # Use NiftiMasker to extract the time series from the ROIs
-    masker = NiftiMasker(mask_img=mask_img, standardize=True)
+    # standardize=False is crucial to prevent data leakage across CV folds.
+    # Standardization is correctly handled within the scikit-learn pipeline.
+    masker = NiftiMasker(mask_img=mask_img, standardize=False)
     X = masker.fit_transform(fmri_data_valid)
     y = labels_valid
 
