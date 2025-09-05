@@ -1,9 +1,29 @@
 import argparse
 from pathlib import Path
+import pandas as pd
+import numpy as np
+from scipy.stats import gamma
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
 from typing import Dict, Any
 import logging
+from nilearn import image
+
+def convolve_with_hrf(events_df: pd.DataFrame, modulator: str, n_scans: int, t_r: float) -> np.ndarray:
+    """Manually convolves a modulator with a canonical HRF."""
+    frame_times = np.arange(n_scans) * t_r
+    
+    # Create the regressor time series
+    regressor = np.zeros(n_scans)
+    for _, trial in events_df.iterrows():
+        onset_scan = int(trial['onset'] / t_r)
+        regressor[onset_scan] = trial[modulator]
+        
+    # Canonical HRF
+    hrf = gamma.pdf(np.arange(0, 32, t_r), a=6, scale=1, loc=0)
+    
+    # Convolve and return
+    return np.convolve(regressor, hrf)[:n_scans]
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
@@ -20,49 +40,45 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     output_dir = derivatives_dir / 'first_level_glms' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Add the parametric modulators directly to the events dataframe.
-    # The 'trial_type' column tells the GLM which events to modulate.
-    events_df['trial_type'] = 'decision'
-    
-    # Ensure modulator columns exist for nilearn to use them
+    # --- Manually Create Parametric Regressors ---
+    n_scans = image.load_img(bold_imgs[0]).shape[3]
     modulators = ['choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']
-    for mod in modulators:
-        if mod not in events_df.columns:
-            raise ValueError(f"Modulator column '{mod}' not found in events dataframe.")
     
-    # Define the GLM using parameters from the config file
+    # Create a copy to avoid modifying the original
+    run_confounds = confounds_dfs[0].copy()
+    
+    for mod in modulators:
+        if mod in events_df.columns:
+            convolved_reg = convolve_with_hrf(events_df, mod, n_scans, params['t_r'])
+            run_confounds[mod] = convolved_reg
+        else:
+            raise ValueError(f"Modulator column '{mod}' not found.")
+            
+    # --- Simplify Events for GLM ---
+    glm_events = events_df[['onset', 'duration']].copy()
+    glm_events['trial_type'] = 'decision'
+    
     glm = FirstLevelModel(
         t_r=params['t_r'],
         slice_time_ref=params['slice_time_ref'],
-        hrf_model='glover',
-        drift_model='cosine',
         mask_img=mask_file,
         signal_scaling=False,
         smoothing_fwhm=params['smoothing_fwhm']
     )
 
-    # Fit the GLM across all runs
-    glm.fit(bold_imgs, events=events_df, confounds=confounds_dfs)
+    glm.fit(bold_imgs, events=glm_events, confounds=[run_confounds])
 
     # --- Define and Compute Contrasts ---
-    # With parametric modulation, the contrast is simply the name of the column.
-    # We also add the main 'decision' effect.
-    contrasts = {
-        'decision': 'decision',
-        'choice': 'choice',
-        'SVchosen': 'SVchosen',
-        'SVunchosen': 'SVunchosen',
-        'SVsum': 'SVsum',
-        'SVdiff': 'SVdiff'
-    }
+    contrasts = {'decision': 'decision', **{mod: mod for mod in modulators}}
 
     for contrast_id, contrast_formula in contrasts.items():
-        logging.info(f"Computing contrast: {contrast_id}")
-        contrast_map = glm.compute_contrast(contrast_formula, output_type='effect_size')
-        
-        contrast_filename = output_dir / f"{subject_id}_contrast-{contrast_id}_map.nii.gz"
-        contrast_map.to_filename(contrast_filename)
-        logging.info(f"Saved contrast map to {contrast_filename}")
+        try:
+            contrast_map = glm.compute_contrast(contrast_formula, output_type='effect_size')
+            contrast_filename = output_dir / f"{subject_id}_contrast-{contrast_id}_map.nii.gz"
+            contrast_map.to_filename(contrast_filename)
+            logging.info(f"Saved contrast map to {contrast_filename}")
+        except ValueError:
+            logging.warning(f"Contrast '{contrast_id}' not found. Skipping.")
 
 
 def main() -> None:

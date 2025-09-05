@@ -8,6 +8,7 @@ from nilearn import image
 
 # Correctly import the refactored function
 from scripts.modeling.run_lss_model import run_lss_for_subject
+from scripts.modeling.run_standard_glm import run_standard_glm_for_subject
 
 # Helper function to create fake data for testing
 def create_fake_nifti(shape=(10, 10, 10, 20), affine=np.eye(4)):
@@ -77,7 +78,8 @@ def synthetic_glm_dataset(tmp_path_factory):
     
     params = {
         't_r': tr,
-        'slice_time_ref': 0.5
+        'slice_time_ref': 0.5,
+        'smoothing_fwhm': 5.0
     }
     
     return subject_data, params, n_trials
@@ -109,3 +111,38 @@ def test_run_lss_for_subject_integration(synthetic_glm_dataset):
     mask_img = image.load_img(subject_data['mask_file'])
     assert beta_maps_img.shape[:3] == mask_img.shape, \
         "Shape of beta maps does not match the brain mask."
+
+def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
+    """
+    Integration smoke test for the standard GLM script.
+    Checks that the script runs to completion and produces all expected
+    contrast map files with the correct dimensions.
+    """
+    subject_data, params, _ = synthetic_glm_dataset
+    
+    # Add a dummy SVunchosen column for the test
+    subject_data['events_df']['SVunchosen'] = np.random.rand(len(subject_data['events_df'])) * 10
+    subject_data['events_df']['SVsum'] = subject_data['events_df']['SVchosen'] + subject_data['events_df']['SVunchosen']
+    subject_data['events_df']['SVdiff'] = subject_data['events_df']['SVchosen'] - subject_data['events_df']['SVunchosen']
+    
+    # Run the standard GLM analysis
+    run_standard_glm_for_subject(subject_data, params)
+    
+    # --- Assertions ---
+    sub_id = subject_data['subject_id']
+    derivatives_dir = subject_data['derivatives_dir']
+    output_dir = derivatives_dir / 'first_level_glms' / sub_id
+    
+    expected_contrasts = ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']
+    
+    for contrast in expected_contrasts:
+        output_path = output_dir / f"{sub_id}_contrast-{contrast}_map.nii.gz"
+        assert output_path.exists(), f"Contrast map for '{contrast}' was not created."
+        
+        # Check the dimensions of the output file
+        contrast_map_img = image.load_img(output_path)
+        assert contrast_map_img.ndim == 3, f"Contrast map '{contrast}' is not a 3D image."
+        
+        mask_img = image.load_img(subject_data['mask_file'])
+        assert contrast_map_img.shape == mask_img.shape, \
+            f"Shape of contrast map '{contrast}' does not match the brain mask."
