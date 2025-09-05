@@ -14,7 +14,10 @@ echo "Running on host: $(hostname)"
 echo "Submitted from: $(pwd)"
 
 # --- Setup ---
-source /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/setup.sh
+# Load the python module and activate your virtual environment
+ml python/3.9
+source .venv/bin/activate
+
 # --- Command ---
 # This script processes all subjects found in the BIDS directory.
 python scripts/behavioral/calculate_discount_rates.py --env hpc

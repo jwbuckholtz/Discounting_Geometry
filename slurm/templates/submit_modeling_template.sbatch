@@ -17,7 +17,9 @@ echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
 # --- Setup ---
-source /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/setup.sh
+ml python/3.9
+source .venv/bin/activate
+
 # --- Commands ---
 echo "Running LSS Model..."
 python scripts/modeling/run_lss_model.py \

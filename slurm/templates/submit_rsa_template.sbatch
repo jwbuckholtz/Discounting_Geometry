@@ -18,7 +18,9 @@ echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
 # --- Setup ---
-source /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/setup.sh
+ml python/3.9
+source .venv/bin/activate
+
 # --- Command ---
 python scripts/rsa/run_rsa_analysis.py \
     --subject $SUBJECT_ID \
