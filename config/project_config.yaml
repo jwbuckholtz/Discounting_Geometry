@@ -27,7 +27,11 @@ hpc:
 # These parameters are used across multiple analysis scripts to ensure consistency.
 analysis_params:
   # GLM Parameters
-  t_r: 0.68 # Updated from 2.0 based on new acquisition info
+  t_r: 0.68 # in seconds
+  # Reference slice for model timing, set to the middle of the TR (0.5).
+  # This aligns the model with data that has been slice-time corrected
+  # during preprocessing (e.g., by fMRIPrep), which is standard for
+  # multiband sequences.
   slice_time_ref: 0.5
   smoothing_fwhm: 5.0
   
