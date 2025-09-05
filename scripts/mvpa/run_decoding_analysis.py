@@ -18,7 +18,7 @@ from typing import Tuple, Dict, Any, List
 import nibabel as nib
 import logging
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_data as load_decoding_data, setup_logging
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, setup_logging
 
 def resample_roi_to_betas(roi_path: Path, beta_maps_path: Path) -> nib.Nifti1Image:
     """Resamples an ROI mask to the space of the beta maps."""
@@ -167,69 +167,73 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     logging.info(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
 
 
-def main() -> None:
+def run_subject_level_decoding(subject_id: str, bids_dir: Path, derivatives_dir: Path, mask_path: str, space: str):
+    """
+    Runs the decoding analysis for a single subject.
+
+    Args:
+        subject_id: The ID of the subject.
+        bids_dir: The path to the BIDS directory.
+        derivatives_dir: The path to the derivatives directory.
+        mask_path: The path to the brain mask.
+        space: The space of the data.
+    """
+    setup_logging()
+    logging.info(f"Running decoding analysis for sub-{subject_id}")
+
+    # --- 1. Load Data ---
+    lss_dir = derivatives_dir / 'lss' / f"sub-{subject_id}"
+    events_file = bids_dir / f"sub-{subject_id}" / 'func' / f"sub-{subject_id}_task-discounting_events.tsv"
+    
+    events_df = pd.read_csv(events_file, sep='\t')
+    beta_maps = sorted(list(lss_dir.glob("*.nii.gz")))
+    
+    # Filter for high vs low value trials
+    conditions = events_df[events_df['trial_type'].isin(['high_value', 'low_value'])]
+    y = conditions['trial_type'].values
+    
+    # Match beta maps to the filtered conditions
+    trial_indices = conditions['trial_index'].values
+    X_paths = [str(p) for p in beta_maps if int(p.stem.split('_trial-')[1].split('_')[0]) in trial_indices]
+
+    # --- 2. Run Decoding ---
+    decoder = Decoder(
+        estimator='svc',
+        mask=mask_path,
+        standardize=True,
+        scoring='accuracy',
+        cv=5
+    )
+    decoder.fit(X_paths, y)
+    
+    # --- 3. Save Results ---
+    output_dir = derivatives_dir / "mvpa"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"sub-{subject_id}_decoding-scores.csv"
+    
+    scores_df = pd.DataFrame({'score': decoder.cv_scores_['high_value'], 'fold': np.arange(1, 6)})
+    scores_df.to_csv(output_path, index=False)
+
+    logging.info(f"Decoding scores saved to {output_path}")
+
+
+def main():
     """Main function to run the decoding analysis."""
-    parser = argparse.ArgumentParser(description="Run MVPA/decoding analysis.")
-    parser.add_argument('--config', default='config/project_config.yaml', help='Path to the project configuration file.')
-    parser.add_argument('--env', default='local', choices=['local', 'hpc'], help="Environment from the config file.")
-    parser.add_argument('--subject', required=True, help='Subject ID (e.g., sub-s061).')
-    parser.add_argument('--target', required=True, help='The variable to decode (e.g., choice, SVchosen).')
-    parser.add_argument('--roi-path', help='Path to a specific ROI mask file or a directory of ROI masks.')
+    parser = argparse.ArgumentParser(description="Run MVPA decoding analysis for a single subject.")
+    parser.add_argument("subject_id", help="Subject ID (e.g., '001').")
+    parser.add_argument("bids_dir", help="Path to the BIDS directory.")
+    parser.add_argument("derivatives_dir", help="Path to the derivatives directory.")
+    parser.add_argument("mask_path", help="Path to the brain mask.")
+    parser.add_argument("--space", default="MNI152NLin2009cAsym", help="The space of the data.")
     args = parser.parse_args()
 
-    setup_logging()
+    run_subject_level_decoding(
+        subject_id=args.subject_id,
+        bids_dir=Path(args.bids_dir),
+        derivatives_dir=Path(args.derivatives_dir),
+        mask_path=args.mask_path,
+        space=args.space
+    )
 
-    # Load configuration
-    config = load_config(args.config)
-    env_config = config[args.env]
-    analysis_params = config['analysis_params']
-    derivatives_dir = Path(env_config['derivatives_dir'])
-    fmriprep_dir = Path(env_config['fmriprep_dir'])
-
-    # 1. Load data (betas and events)
-    logging.info("Loading beta maps and behavioral data...")
-    # This now loads the concatenated data and run information
-    beta_maps_img, events_df = load_decoding_data(args.subject, derivatives_dir)
-
-    # 2. Prepare data for decoding (this is independent of the mask)
-    logging.info(f"Preparing data for decoding target: {args.target}")
-    labels, valid_trials_mask, groups = prepare_decoding_data(events_df, args.target, beta_maps_img.shape[-1])
-    is_categorical = (events_df[args.target].dtype == 'object')
-
-    # 3. Determine which mask(s) to use
-    if args.roi_path:
-        roi_path = Path(args.roi_path)
-        if roi_path.is_dir():
-            roi_files = sorted(list(roi_path.glob('*.nii.gz')) + list(roi_path.glob('*.nii')))
-            logging.info(f"Found {len(roi_files)} ROI files in directory: {roi_path}")
-        elif roi_path.is_file():
-            roi_files = [roi_path]
-        else:
-            raise FileNotFoundError(f"ROI path not found: {args.roi_path}")
-    else:
-        # If no ROI path is provided, use the whole-brain mask as a single "ROI"
-        logging.info("No ROI path provided. Using whole-brain mask.")
-        # Find the whole-brain mask which we'll use as a default
-        # The find_fmriprep_files function is robust to session variability.
-        _, brain_mask_path, _ = find_fmriprep_files(fmriprep_dir, args.subject)
-        roi_files = [Path(brain_mask_path)]
-
-    # 4. Loop through each mask, run decoding, and save results
-    for roi_file in roi_files:
-        roi_name = roi_file.name.split('.')[0] # Get a clean name, e.g., 'vmPFC' from 'vmPFC.nii.gz'
-        logging.info(f"\n--- Running analysis for ROI: {roi_name} ---")
-        
-        # Resample the mask to match the beta maps' space
-        mask_img = resample_roi_to_betas(roi_file, betas_path)
-
-        # Run the decoding with the current mask
-        scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical, analysis_params)
-
-        # Save the results for the current mask
-        output_dir = derivatives_dir / 'mvpa' / args.subject
-        save_results(args.subject, args.target, scores, output_dir, roi_name)
-
-    logging.info(f"\nSuccessfully finished all analyses for {args.subject}, target: {args.target}")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
