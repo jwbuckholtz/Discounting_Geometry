@@ -15,12 +15,12 @@ dependencies = [
     "seaborn",
     "pyyaml",
     "pytest",
+    "pytz",
+    "python-dateutil",
 ]
 
 [project.optional-dependencies]
-test = [
-    "pytest",
-]
+test = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]
