@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import yaml
 import pandas as pd
+from nilearn.glm.first_level import load_confounds_strategy
 
 def load_config(config_path):
     """Loads the YAML config file."""
