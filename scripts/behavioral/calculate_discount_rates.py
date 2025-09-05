@@ -5,10 +5,12 @@ import os
 import argparse
 import yaml
 from pathlib import Path
+from typing import Dict, Any, Tuple
+import logging
 
-from scripts.utils import load_config
+from scripts.utils import load_config, setup_logging
 
-def hyperbolic_discount(delay, amount, k):
+def hyperbolic_discount(delay: np.ndarray, amount: np.ndarray, k: float) -> np.ndarray:
     """
     Calculates the subjective value of a delayed reward using a hyperbolic model.
 
@@ -22,7 +24,7 @@ def hyperbolic_discount(delay, amount, k):
     """
     return amount / (1 + k * delay)
 
-def choice_probability(params, S, L, D):
+def choice_probability(params: Tuple[float, float], S: np.ndarray, L: np.ndarray, D: np.ndarray) -> np.ndarray:
     """
     Calculates the probability of choosing the larger, later reward using a softmax function.
 
@@ -44,7 +46,7 @@ def choice_probability(params, S, L, D):
     prob_later = 1 / (1 + np.exp(-(sv_later - sv_sooner) / tau))
     return prob_later
 
-def fit_discount_rate(data):
+def fit_discount_rate(data: pd.DataFrame) -> Dict[str, float]:
     """
     Fits the hyperbolic discounting model to behavioral data to estimate k and tau.
 
@@ -77,7 +79,7 @@ def fit_discount_rate(data):
                       bounds=[(1e-6, None), (1e-6, None)])
 
     if not result.success:
-        print(f"Warning: Optimization failed. Reason: {result.message}")
+        logging.warning(f"Optimization failed. Reason: {result.message}")
         return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
 
     # Calculate pseudo-R-squared (McFadden's R-squared)
@@ -94,7 +96,7 @@ def fit_discount_rate(data):
     }
     return fit_results
 
-def calculate_subjective_values(data, k):
+def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
     """
     Calculates subjective values for chosen and unchosen options.
 
@@ -129,7 +131,7 @@ def calculate_subjective_values(data, k):
 
     return data
 
-def process_subject_data(subject_id, onsets_dir, derivatives_dir):
+def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Path) -> Dict[str, Any]:
     """
     Processes all behavioral data for a single subject, handling multiple runs.
     """
@@ -139,7 +141,7 @@ def process_subject_data(subject_id, onsets_dir, derivatives_dir):
     event_files = sorted(list(onsets_dir.glob(f'{onset_subject_id}*discountFix_events.tsv')))
     
     if not event_files:
-        print(f"Warning: No event files found for {subject_id}")
+        logging.warning(f"No event files found for {subject_id}")
         return None
         
     # Load and concatenate data from all runs
@@ -168,12 +170,12 @@ def process_subject_data(subject_id, onsets_dir, derivatives_dir):
     output_path = output_dir / f'{subject_id}_discounting_with_sv.tsv'
     data_with_sv.to_csv(output_path, sep='\t', index=False)
     
-    print(f"Processed and saved combined data for {subject_id} from {len(event_files)} run(s)")
+    logging.info(f"Processed and saved combined data for {subject_id} from {len(event_files)} run(s)")
     
     # Return the summary results for aggregation
     return { 'subject_id': subject_id, **fit_results }
 
-def main():
+def main() -> None:
     """
     Main function to run the discount rate and subjective value calculations.
     """
@@ -184,6 +186,8 @@ def main():
     parser.add_argument('--bids-dir', help='Override the BIDS data directory path from the config file.')
     parser.add_argument('--derivatives-dir', help='Override the derivatives directory path from the config file.')
     args = parser.parse_args()
+    
+    setup_logging()
 
     # Load configuration
     config = load_config(args.config)
@@ -219,7 +223,7 @@ def main():
         summary_output_dir = derivatives_dir / 'behavioral'
         summary_output_dir.mkdir(parents=True, exist_ok=True)
         summary_df.to_csv(summary_output_dir / 'discounting_model_fits.tsv', sep='\t', index=False)
-        print(f"\nSaved aggregated model fit results to {summary_output_dir}")
+        logging.info(f"\nSaved aggregated model fit results to {summary_output_dir}")
 
 
 if __name__ == '__main__':

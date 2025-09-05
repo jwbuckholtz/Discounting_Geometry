@@ -10,19 +10,21 @@ from nilearn.maskers import NiftiMasker
 from nilearn import image
 import matplotlib.pyplot as plt
 import seaborn as sns
+import logging
+from typing import Dict, Any, Tuple
 
-from scripts.utils import find_fmriprep_files
+from scripts.utils import find_fmriprep_files, setup_logging
 
-def load_config(config_file):
+def load_config(config_file: Path) -> Dict[str, Any]:
     """Load the project configuration from a YAML file."""
     with open(config_file, 'r') as f:
         return yaml.safe_load(f)
 
-def load_data(derivatives_dir, fmriprep_dir, subject_id):
+def load_data(derivatives_dir: Path, fmriprep_dir: Path, subject_id: str) -> Tuple[Path, Path, Path]:
     """
     Loads paths to the necessary data files for a subject.
     """
-    print(f"Loading data for {subject_id}...")
+    logging.info(f"Loading data for {subject_id}...")
     
     lss_beta_dir = Path(derivatives_dir) / 'lss_betas' / subject_id
     beta_map_path = lss_beta_dir / f'{subject_id}_lss_beta_maps.nii.gz'
@@ -37,10 +39,10 @@ def load_data(derivatives_dir, fmriprep_dir, subject_id):
     # Find whole-brain mask from fMRIPrep outputs
     _, brain_mask_path, _ = find_fmriprep_files(fmriprep_dir, subject_id)
 
-    print("Data loaded successfully.")
+    logging.info("Data loaded successfully.")
     return beta_map_path, behavioral_data_path, brain_mask_path
 
-def run_embedding(beta_maps_img, brain_mask_img, method='tsne', n_components=2, **kwargs):
+def run_embedding(beta_maps_img: nib.Nifti1Image, brain_mask_img: nib.Nifti1Image, method: str = 'tsne', n_components: int = 2, **kwargs) -> np.ndarray:
     """
     Extracts data from beta maps within a brain mask and computes a
     low-dimensional embedding.
@@ -66,7 +68,7 @@ def run_embedding(beta_maps_img, brain_mask_img, method='tsne', n_components=2, 
     masker = NiftiMasker(mask_img=brain_mask_img, standardize=True)
     masked_data = masker.fit_transform(beta_maps_img)
 
-    print(f"Running {method.upper()} with {n_components} components...")
+    logging.info(f"Running {method.upper()} with {n_components} components...")
     
     if method == 'tsne':
         # Default perplexity is often a good starting point, but can be tuned.
@@ -83,7 +85,7 @@ def run_embedding(beta_maps_img, brain_mask_img, method='tsne', n_components=2, 
     embedding = model.fit_transform(masked_data)
     return embedding
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Plot low-dimensional embeddings of beta maps.")
     parser.add_argument('--subject', type=str, required=True, help='Subject ID (e.g., sub-s061)')
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
@@ -94,19 +96,20 @@ def main():
 
     args = parser.parse_args()
     
+    setup_logging()
+    
     config = load_config(args.config)
     paths = config[args.env]
     derivatives_dir = Path(paths['derivatives_dir'])
     fmriprep_dir = Path(paths['fmriprep_dir'])
 
     # Load data
-    print(f"Loading data for {args.subject}...")
     beta_maps_path, behavioral_data_path, brain_mask_path = load_data(derivatives_dir, fmriprep_dir, args.subject)
     
     # If a specific ROI is provided, use it instead of the whole-brain mask
     if args.roi_path:
         brain_mask_path = Path(args.roi_path)
-        print(f"Using provided ROI mask: {brain_mask_path}")
+        logging.info(f"Using provided ROI mask: {brain_mask_path}")
         if not brain_mask_path.exists():
             raise FileNotFoundError(f"ROI mask not found at {brain_mask_path}")
 
@@ -122,7 +125,7 @@ def main():
     valid_trials_mask = behavioral_data[args.color_by].notna().values
     
     # Filter beta maps and behavioral data
-    print(f"Found {valid_trials_mask.sum()} valid trials out of {len(valid_trials_mask)} for '{args.color_by}'.")
+    logging.info(f"Found {valid_trials_mask.sum()} valid trials out of {len(valid_trials_mask)} for '{args.color_by}'.")
     filtered_betas_img = image.index_img(beta_maps_img, valid_trials_mask)
     filtered_behavioral_data = behavioral_data[valid_trials_mask].reset_index(drop=True)
 
@@ -160,7 +163,7 @@ def main():
     output_path = output_dir / output_filename
     plt.savefig(output_path)
     
-    print(f"Plot saved to {output_path}")
+    logging.info(f"Plot saved to {output_path}")
 
 if __name__ == '__main__':
     main()

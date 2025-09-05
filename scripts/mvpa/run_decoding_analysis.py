@@ -14,24 +14,24 @@ from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
+from typing import Tuple, Dict, Any, List
+import nibabel as nib
+import logging
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_data as load_decoding_data
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_data as load_decoding_data, setup_logging
 
-def resample_roi_to_betas(roi_path, beta_maps_path):
+def resample_roi_to_betas(roi_path: Path, beta_maps_path: Path) -> nib.Nifti1Image:
     """Resamples an ROI mask to the space of the beta maps."""
-    print(f"Resampling ROI mask to match beta maps space...")
-    # Use the first volume of the beta maps as the reference for resampling
-    target_affine = image.index_img(beta_maps_path, 0).affine
-    target_shape = image.index_img(beta_maps_path, 0).shape
-
+    logging.info(f"Resampling ROI mask to match beta maps space...")
+    
     resampled_roi = image.resample_to_img(
         source_img=image.load_img(str(roi_path)),
-        target_img=image.index_img(beta_maps_path, 0),
+        target_img=image.index_img(str(beta_maps_path), 0),
         interpolation='nearest'
     )
     return resampled_roi
 
-def load_data(subject_id, derivatives_dir):
+def load_data(subject_id: str, derivatives_dir: Path) -> Tuple[nib.Nifti1Image, pd.DataFrame]:
     """
     Loads the necessary data for a single subject's decoding analysis.
     
@@ -56,7 +56,7 @@ def load_data(subject_id, derivatives_dir):
 
     return beta_maps_img, events_df
 
-def prepare_decoding_data(events_df, target_variable, n_betas):
+def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Prepares the data for the decoding analysis by creating the labels (y) and
     identifying the relevant trials. This function is robust to NaNs.
@@ -87,7 +87,7 @@ def prepare_decoding_data(events_df, target_variable, n_betas):
         valid_labels = labels_series[valid_trials_mask]
         codes, uniques = pd.factorize(valid_labels)
         
-        print(f"Found {len(uniques)} unique labels for categorical target '{target_variable}': {uniques.tolist()}")
+        logging.info(f"Found {len(uniques)} unique labels for categorical target '{target_variable}': {uniques.tolist()}")
         
         # Create a new float array to store codes, preserving NaNs elsewhere
         final_labels = np.full(labels_series.shape, np.nan)
@@ -99,7 +99,7 @@ def prepare_decoding_data(events_df, target_variable, n_betas):
     return final_labels, valid_trials_mask, groups
 
 
-def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical, cv_params):
+def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labels: np.ndarray, valid_trials_mask: np.ndarray, groups: np.ndarray, is_categorical: bool, cv_params: Dict[str, Any]) -> np.ndarray:
     """
     Runs the MVPA/decoding analysis using scikit-learn directly for robustness.
 
@@ -127,26 +127,24 @@ def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_
 
     # --- 2. Set up the Model and Cross-Validation ---
     if is_categorical:
-        print("Running classification analysis with StratifiedGroupKFold...")
+        logging.info("Running classification analysis with StratifiedGroupKFold...")
         model = make_pipeline(StandardScaler(), SVC(kernel='linear', class_weight='balanced'))
         cv = StratifiedGroupKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
         scoring = 'accuracy'
     else:
-        print("Running regression analysis with GroupKFold...")
+        logging.info("Running regression analysis with GroupKFold...")
         model = make_pipeline(StandardScaler(), SVR(kernel='linear'))
         cv = GroupKFold(n_splits=cv_params['n_splits'])
         scoring = 'r2'
         
     # --- 3. Run Cross-Validation ---
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # Pass the groups to the cv iterator
-        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, groups=groups_valid)
+    # Pass the groups to the cv iterator
+    scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, groups=groups_valid)
     
     return scores
 
 
-def save_results(subject_id, target_variable, scores, output_dir, roi_name):
+def save_results(subject_id: str, target_variable: str, scores: np.ndarray, output_dir: Path, roi_name: str) -> None:
     """
     Saves the decoding results to a file.
 
@@ -165,11 +163,11 @@ def save_results(subject_id, target_variable, scores, output_dir, roi_name):
     output_path = output_dir / output_filename
     results_df.to_csv(output_path, sep='\t', index=False)
     
-    print(f"Saved decoding scores to {output_path}")
-    print(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
+    logging.info(f"Saved decoding scores to {output_path}")
+    logging.info(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
 
 
-def main():
+def main() -> None:
     """Main function to run the decoding analysis."""
     parser = argparse.ArgumentParser(description="Run MVPA/decoding analysis.")
     parser.add_argument('--config', default='config/project_config.yaml', help='Path to the project configuration file.')
@@ -179,6 +177,8 @@ def main():
     parser.add_argument('--roi-path', help='Path to a specific ROI mask file or a directory of ROI masks.')
     args = parser.parse_args()
 
+    setup_logging()
+
     # Load configuration
     config = load_config(args.config)
     env_config = config[args.env]
@@ -187,12 +187,12 @@ def main():
     fmriprep_dir = Path(env_config['fmriprep_dir'])
 
     # 1. Load data (betas and events)
-    print("Loading beta maps and behavioral data...")
+    logging.info("Loading beta maps and behavioral data...")
     # This now loads the concatenated data and run information
     beta_maps_img, events_df = load_decoding_data(args.subject, derivatives_dir)
 
     # 2. Prepare data for decoding (this is independent of the mask)
-    print(f"Preparing data for decoding target: {args.target}")
+    logging.info(f"Preparing data for decoding target: {args.target}")
     labels, valid_trials_mask, groups = prepare_decoding_data(events_df, args.target, beta_maps_img.shape[-1])
     is_categorical = (events_df[args.target].dtype == 'object')
 
@@ -201,14 +201,14 @@ def main():
         roi_path = Path(args.roi_path)
         if roi_path.is_dir():
             roi_files = sorted(list(roi_path.glob('*.nii.gz')) + list(roi_path.glob('*.nii')))
-            print(f"Found {len(roi_files)} ROI files in directory: {roi_path}")
+            logging.info(f"Found {len(roi_files)} ROI files in directory: {roi_path}")
         elif roi_path.is_file():
             roi_files = [roi_path]
         else:
             raise FileNotFoundError(f"ROI path not found: {args.roi_path}")
     else:
         # If no ROI path is provided, use the whole-brain mask as a single "ROI"
-        print("No ROI path provided. Using whole-brain mask.")
+        logging.info("No ROI path provided. Using whole-brain mask.")
         # Find the whole-brain mask which we'll use as a default
         # The find_fmriprep_files function is robust to session variability.
         _, brain_mask_path, _ = find_fmriprep_files(fmriprep_dir, args.subject)
@@ -217,7 +217,7 @@ def main():
     # 4. Loop through each mask, run decoding, and save results
     for roi_file in roi_files:
         roi_name = roi_file.name.split('.')[0] # Get a clean name, e.g., 'vmPFC' from 'vmPFC.nii.gz'
-        print(f"\n--- Running analysis for ROI: {roi_name} ---")
+        logging.info(f"\n--- Running analysis for ROI: {roi_name} ---")
         
         # Resample the mask to match the beta maps' space
         mask_img = resample_roi_to_betas(roi_file, betas_path)
@@ -229,7 +229,7 @@ def main():
         output_dir = derivatives_dir / 'mvpa' / args.subject
         save_results(args.subject, args.target, scores, output_dir, roi_name)
 
-    print(f"\nSuccessfully finished all analyses for {args.subject}, target: {args.target}")
+    logging.info(f"\nSuccessfully finished all analyses for {args.subject}, target: {args.target}")
 
 if __name__ == '__main__':
     main()

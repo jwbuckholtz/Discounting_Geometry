@@ -12,15 +12,18 @@ from nilearn.decoding import SearchLight
 from sklearn.model_selection import KFold, GroupKFold
 from pathlib import Path
 from sklearn.base import BaseEstimator
+from typing import Dict, Any, Tuple, List
+import nibabel as nib
+import logging
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_concatenated_subject_data
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_concatenated_subject_data, setup_logging
 
-def resample_roi_to_betas(roi_img, beta_maps_img):
+def resample_roi_to_betas(roi_img: nib.Nifti1Image, beta_maps_img: nib.Nifti1Image) -> nib.Nifti1Image:
     """Resamples an ROI mask to match the space of the beta maps."""
-    print("  - Resampling ROI to match beta map space...")
+    logging.info("  - Resampling ROI to match beta map space...")
     return image.resample_to_img(roi_img, beta_maps_img, interpolation='nearest')
 
-def load_data(subject_id, derivatives_dir, fmriprep_dir):
+def load_data(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path) -> Tuple[nib.Nifti1Image, pd.DataFrame, nib.Nifti1Image]:
     """
     Loads the necessary data for a single subject's RSA.
     """
@@ -38,7 +41,7 @@ def load_data(subject_id, derivatives_dir, fmriprep_dir):
 
     return beta_maps_img, events_df, mask_img
 
-def create_neural_rdm(beta_maps_img, mask_img):
+def create_neural_rdm(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> np.ndarray:
     """
     Creates a neural RDM from the single-trial beta maps.
 
@@ -59,11 +62,11 @@ def create_neural_rdm(beta_maps_img, mask_img):
     # The metric 'correlation' computes 1 - Pearson correlation.
     neural_rdm = squareform(pdist(voxel_data, metric='correlation'))
     
-    print(f"Created neural RDM with shape: {neural_rdm.shape}")
+    logging.info(f"Created neural RDM with shape: {neural_rdm.shape}")
     
     return neural_rdm
 
-def create_theoretical_rdm(events_df, variable, valid_trials_mask):
+def create_theoretical_rdm(events_df: pd.DataFrame, variable: str, valid_trials_mask: np.ndarray) -> np.ndarray:
     """
     Creates a theoretical RDM based on a specific behavioral variable.
 
@@ -87,18 +90,18 @@ def create_theoretical_rdm(events_df, variable, valid_trials_mask):
         # pdist with 'hamming' computes the proportion of disagreeing elements
         # For binary data, this is 0 if same, 1 if different.
         rdm = squareform(pdist(labels[:, np.newaxis], metric='hamming'))
-        print(f"Created categorical RDM for '{variable}'")
+        logging.info(f"Created categorical RDM for '{variable}'")
     else:
         # --- Continuous RDM (e.g., for SV measures) ---
         # Calculate the absolute difference between each pair of values
         values = variable_data.values
         rdm = np.abs(values[:, np.newaxis] - values[np.newaxis, :])
-        print(f"Created continuous RDM for '{variable}'")
+        logging.info(f"Created continuous RDM for '{variable}'")
         
     return rdm
 
 
-def run_rsa(neural_rdm, theoretical_rdms):
+def run_rsa(neural_rdm: np.ndarray, theoretical_rdms: Dict[str, np.ndarray]) -> Dict[str, float]:
     """
     Correlates the neural RDM with one or more theoretical RDMs.
 
@@ -123,13 +126,13 @@ def run_rsa(neural_rdm, theoretical_rdms):
             # --- 3. Calculate Spearman's Correlation ---
             corr, _ = spearmanr(neural_rdm_vec, theoretical_rdm_vec)
             rsa_results[name] = corr
-            print(f"  - RSA Result for '{name}': rho={corr:.3f}")
+            logging.info(f"  - RSA Result for '{name}': rho={corr:.3f}")
         else:
             rsa_results[name] = np.nan
             
     return rsa_results
 
-def run_crossval_rsa(voxel_data, theoretical_rdms, groups, cv_params):
+def run_crossval_rsa(voxel_data: np.ndarray, theoretical_rdms: Dict[str, np.ndarray], groups: np.ndarray, cv_params: Dict[str, Any]) -> Dict[str, np.ndarray]:
     """
     Performs a cross-validated RSA, respecting data groups (e.g., runs).
     """
@@ -141,7 +144,7 @@ def run_crossval_rsa(voxel_data, theoretical_rdms, groups, cv_params):
     results = {name: [] for name in theoretical_rdms.keys()}
 
     for fold, (train_idx, test_idx) in enumerate(gkf.split(X=np.arange(n_trials), groups=groups)):
-        print(f"  - Running Fold {fold+1}/{gkf.n_splits}...")
+        logging.info(f"  - Running Fold {fold+1}/{gkf.n_splits}...")
         
         # 1. Calculate the cross-fold neural RDM portion
         neural_rdm_part = cdist(voxel_data[train_idx], voxel_data[test_idx], metric='correlation').flatten()
@@ -164,10 +167,10 @@ class RSASearchlightEstimator(BaseEstimator):
     """
     A scikit-learn compatible estimator for running RSA within a searchlight.
     """
-    def __init__(self, theoretical_rdms_vec):
+    def __init__(self, theoretical_rdms_vec: Dict[str, np.ndarray]):
         self.theoretical_rdms_vec = theoretical_rdms_vec
 
-    def fit(self, X, y=None):
+    def fit(self, X: np.ndarray, y=None):
         """
         Fit the RSA model to the data of a single searchlight sphere.
 
@@ -190,7 +193,7 @@ class RSASearchlightEstimator(BaseEstimator):
         return self
 
 
-def run_searchlight_rsa(beta_maps_img, mask_img, theoretical_rdms):
+def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, theoretical_rdms: Dict[str, np.ndarray]) -> Dict[str, nib.Nifti1Image]:
     """
     Performs a searchlight RSA using a custom scikit-learn estimator.
     """
@@ -232,26 +235,26 @@ def run_searchlight_rsa(beta_maps_img, mask_img, theoretical_rdms):
     return result_maps
 
 
-def save_rdm(subject_id, rdm, model_name, output_dir):
+def save_rdm(subject_id: str, rdm: np.ndarray, model_name: str, output_dir: Path) -> None:
     """Saves a single RDM to a file."""
     rdm_dir = output_dir / 'rdms'
     rdm_dir.mkdir(parents=True, exist_ok=True)
     rdm_path = rdm_dir / f'{subject_id}_model-{model_name}_rdm.tsv'
     pd.DataFrame(rdm).to_csv(rdm_path, sep='\t', header=False, index=False)
-    print(f"Saved RDM for model '{model_name}' to {rdm_path}")
+    logging.info(f"Saved RDM for model '{model_name}' to {rdm_path}")
 
 
-def save_searchlight_maps(subject_id, searchlight_results, output_dir):
+def save_searchlight_maps(subject_id: str, searchlight_results: Dict[str, nib.Nifti1Image], output_dir: Path) -> None:
     """Saves the output maps from a searchlight analysis."""
     maps_dir = output_dir / 'searchlight_maps'
     maps_dir.mkdir(parents=True, exist_ok=True)
     for model_name, map_img in searchlight_results.items():
         map_path = maps_dir / f'{subject_id}_model-{model_name}_searchlight-map.nii.gz'
         map_img.to_filename(map_path)
-        print(f"Saved searchlight map for model '{model_name}' to {map_path}")
+        logging.info(f"Saved searchlight map for model '{model_name}' to {map_path}")
 
 
-def save_results(subject_id, rsa_results, output_dir, analysis_name):
+def save_results(subject_id: str, rsa_results: Dict[str, Any], output_dir: Path, analysis_name: str) -> None:
     """
     Saves the RSA results to a file.
     
@@ -280,10 +283,10 @@ def save_results(subject_id, rsa_results, output_dir, analysis_name):
     output_path = results_dir / f'{subject_id}_analysis-{analysis_name}_rsa-results.tsv'
     results_df.to_csv(output_path, sep='\t', index=False)
     
-    print(f"Saved RSA results for '{analysis_name}' to {output_path}")
+    logging.info(f"Saved RSA results for '{analysis_name}' to {output_path}")
 
 
-def main():
+def main() -> None:
     """Main function to run the RSA."""
     parser = argparse.ArgumentParser(description="Run Representational Similarity Analysis (RSA).")
     parser.add_argument('--config', default='config/project_config.yaml', help='Path to the project configuration file.')
@@ -293,6 +296,8 @@ def main():
                         help="The type of RSA to run.")
     parser.add_argument('--roi-path', help="Path to the ROI mask file OR a directory of ROI masks.")
     args = parser.parse_args()
+    
+    setup_logging()
     
     # --- Validation for ROI analysis ---
     if args.analysis_type == 'roi' and not args.roi_path:
@@ -306,7 +311,7 @@ def main():
     fmriprep_dir = Path(env_config['fmriprep_dir'])
 
     # 1. Load data (beta maps and events)
-    print(f"Loading data for {args.subject}...")
+    logging.info(f"Loading data for {args.subject}...")
     subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
     beta_maps_img = image.load_img(subject_data['bold_imgs']) # needs to be loaded from path list
     events_df = subject_data['events_df']
@@ -338,13 +343,13 @@ def main():
 
         if args.analysis_type == 'searchlight':
             # --- Run Searchlight RSA ---
-            print("\n--- Running Searchlight RSA ---")
+            logging.info("\n--- Running Searchlight RSA ---")
             searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms)
             save_searchlight_maps(args.subject, searchlight_results, output_dir)
-            print("Searchlight analysis complete.")
+            logging.info("Searchlight analysis complete.")
         else: # whole_brain
             # --- Run Whole-Brain RSA ---
-            print("\n--- Running Whole-Brain RSA ---")
+            logging.info("\n--- Running Whole-Brain RSA ---")
             neural_rdm = create_neural_rdm(beta_maps_valid, mask_img)
             
             # For whole-brain, we will run the cross-validated RSA
@@ -360,11 +365,11 @@ def main():
             roi_files = [roi_path]
         else:
             roi_files = sorted(list(roi_path.glob('*.nii.gz')) + list(roi_path.glob('*.nii')))
-            print(f"Found {len(roi_files)} ROI masks in directory: {roi_path}")
+            logging.info(f"Found {len(roi_files)} ROI masks in directory: {roi_path}")
             
         for roi_file in roi_files:
             roi_name = roi_file.stem.replace('_mask', '')
-            print(f"\n--- Running Cross-validated RSA for ROI: {roi_name} ---")
+            logging.info(f"\n--- Running Cross-validated RSA for ROI: {roi_name} ---")
             
             # Load the original ROI mask
             original_roi_mask = image.load_img(roi_file)
@@ -390,7 +395,7 @@ def main():
         if rdm is not None:
             save_rdm(args.subject, rdm, name, output_dir)
 
-    print(f"\nSuccessfully finished RSA for {args.subject}")
+    logging.info(f"\nSuccessfully finished RSA for {args.subject}")
 
 if __name__ == '__main__':
     main()

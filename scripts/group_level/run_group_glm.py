@@ -4,13 +4,15 @@ import pandas as pd
 from nilearn.glm.second_level import SecondLevelModel
 from nilearn import plotting
 import matplotlib.pyplot as plt
-from scripts.utils import load_config
+from scripts.utils import load_config, setup_logging
+from typing import Dict, Any
+import logging
 
-def run_group_glm(derivatives_dir, contrast_id, n_subjects):
+def run_group_glm(derivatives_dir: Path, contrast_id: str, n_subjects: int) -> None:
     """
     Runs a group-level (second-level) GLM analysis for a given contrast.
     """
-    print(f"--- Running Group-Level GLM for contrast: {contrast_id} ---")
+    logging.info(f"--- Running Group-Level GLM for contrast: {contrast_id} ---")
 
     # --- 1. Find all first-level contrast maps ---
     first_level_dir = Path(derivatives_dir) / 'first_level_glms'
@@ -19,9 +21,9 @@ def run_group_glm(derivatives_dir, contrast_id, n_subjects):
     if not contrast_maps:
         raise FileNotFoundError(f"No contrast maps found for '{contrast_id}' in {first_level_dir}")
     
-    print(f"Found {len(contrast_maps)} contrast maps for {len(n_subjects)} subjects.")
+    logging.info(f"Found {len(contrast_maps)} contrast maps for {len(n_subjects)} subjects.")
     if len(contrast_maps) != len(n_subjects):
-        print("Warning: Number of contrast maps does not match number of subjects in BIDS dir.")
+        logging.warning("Number of contrast maps does not match number of subjects in BIDS dir.")
 
 
     # --- 2. Define and Fit Second-Level Model ---
@@ -40,7 +42,7 @@ def run_group_glm(derivatives_dir, contrast_id, n_subjects):
     
     z_map_filename = output_dir / f"group_contrast-{contrast_id}_zmap.nii.gz"
     z_map.to_filename(z_map_filename)
-    print(f"Saved group z-map to {z_map_filename}")
+    logging.info(f"Saved group z-map to {z_map_filename}")
 
     # --- 5. Create and Save Plots ---
     # Use nilearn's plotting functions to create a statistical map plot
@@ -58,15 +60,17 @@ def run_group_glm(derivatives_dir, contrast_id, n_subjects):
         output_file=output_dir / f"group_contrast-{contrast_id}_glassbrain.png"
     )
     plt.close('all') # Close plots to free memory
-    print(f"Saved result plots to {output_dir}")
+    logging.info(f"Saved result plots to {output_dir}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run group-level GLM analysis.")
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
     parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment to run on')
     parser.add_argument('--contrast', type=str, required=True, help='The name of the contrast to analyze (e.g., SVdiff)')
     args = parser.parse_args()
+
+    setup_logging()
 
     config = load_config(args.config)
     env_config = config[args.env]
@@ -77,7 +81,7 @@ def main():
     subjects = [s.name for s in bids_dir.glob('sub-*') if s.is_dir()]
 
     run_group_glm(derivatives_dir, args.contrast, subjects)
-    print("Group-level analysis finished successfully.")
+    logging.info("Group-level analysis finished successfully.")
 
 
 if __name__ == "__main__":

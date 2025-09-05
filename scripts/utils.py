@@ -2,28 +2,40 @@ import os
 from pathlib import Path
 import yaml
 import pandas as pd
+import numpy as np
 from nilearn.glm.first_level import load_confounds_strategy
+from typing import Dict, Any, List, Tuple
+import nibabel as nib
+import logging
 
-def load_config(config_path):
+def setup_logging():
+    """Sets up a simple logging configuration."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+def load_config(config_path: Path) -> Dict[str, Any]:
     """Loads the YAML config file."""
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def find_lss_beta_maps(derivatives_dir, subject_id):
+def find_lss_beta_maps(derivatives_dir: Path, subject_id: str) -> Path:
     """Finds the LSS beta maps file for a given subject."""
     betas_path = Path(derivatives_dir) / 'lss_betas' / subject_id / f'{subject_id}_lss_beta_maps.nii.gz'
     if not betas_path.exists():
         raise FileNotFoundError(f"LSS beta maps not found for {subject_id} at {betas_path}")
     return betas_path
 
-def find_behavioral_sv_file(derivatives_dir, subject_id):
+def find_behavioral_sv_file(derivatives_dir: Path, subject_id: str) -> Path:
     """Finds the behavioral file with subjective values for a given subject."""
     events_path = Path(derivatives_dir) / 'behavioral' / subject_id / f'{subject_id}_discounting_with_sv.tsv'
     if not events_path.exists():
         raise FileNotFoundError(f"Behavioral SV file not found for {subject_id} at {events_path}")
     return events_path
 
-def find_fmriprep_files(fmriprep_dir, subject_id):
+def find_fmriprep_files(fmriprep_dir: Path, subject_id: str) -> Tuple[Path, Path, Path]:
     """
     Finds the necessary fMRIPrep output files for a given subject.
     This version is robust to session variability and uses a precise matching
@@ -68,7 +80,7 @@ def find_fmriprep_files(fmriprep_dir, subject_id):
         f"task 'discountFix' for {subject_id} in {fmriprep_dir}"
     )
 
-def load_subject_data(config_path, env, subject_id):
+def load_subject_data(config_path: Path, env: str, subject_id: str) -> Dict[str, Any]:
     """
     Loads all necessary files for a single subject for first-level modeling.
     
@@ -102,7 +114,7 @@ def load_subject_data(config_path, env, subject_id):
         "derivatives_dir": derivatives_dir
     }
 
-def find_subject_runs(fmriprep_dir, subject_id):
+def find_subject_runs(fmriprep_dir: Path, subject_id: str) -> List[Dict[str, str]]:
     """Finds all preprocessed BOLD files for all runs of the discountFix task."""
     fmriprep_path = Path(fmriprep_dir)
     subject_path = fmriprep_path / subject_id
@@ -134,7 +146,7 @@ def find_subject_runs(fmriprep_dir, subject_id):
     
     return run_files
 
-def load_concatenated_subject_data(config_path, env, subject_id):
+def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str) -> Dict[str, Any]:
     """
     Loads and concatenates all functional data for a subject across all runs.
     """

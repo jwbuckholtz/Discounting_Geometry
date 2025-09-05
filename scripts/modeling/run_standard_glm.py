@@ -1,9 +1,11 @@
 import argparse
 from pathlib import Path
 from nilearn.glm.first_level import FirstLevelModel
-from scripts.utils import load_concatenated_subject_data, load_config
+from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
+from typing import Dict, Any
+import logging
 
-def run_standard_glm_for_subject(subject_data, params):
+def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
     Runs a standard GLM with parametric modulators across one or more runs.
     """
@@ -14,7 +16,7 @@ def run_standard_glm_for_subject(subject_data, params):
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
 
-    print(f"--- Running Standard GLM for {subject_id} on {len(bold_imgs)} run(s) ---")
+    logging.info(f"--- Running Standard GLM for {subject_id} on {len(bold_imgs)} run(s) ---")
     output_dir = derivatives_dir / 'first_level_glms' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,20 +57,22 @@ def run_standard_glm_for_subject(subject_data, params):
     }
 
     for contrast_id, contrast_formula in contrasts.items():
-        print(f"Computing contrast: {contrast_id}")
+        logging.info(f"Computing contrast: {contrast_id}")
         contrast_map = glm.compute_contrast(contrast_formula, output_type='effect_size')
         
         contrast_filename = output_dir / f"{subject_id}_contrast-{contrast_id}_map.nii.gz"
         contrast_map.to_filename(contrast_filename)
-        print(f"Saved contrast map to {contrast_filename}")
+        logging.info(f"Saved contrast map to {contrast_filename}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run standard GLM for a single subject.")
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
     parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment to run on')
     parser.add_argument('--subject', type=str, required=True, help='The subject ID to process')
     args = parser.parse_args()
+
+    setup_logging()
 
     # --- Load Data & Config ---
     subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)

@@ -2,13 +2,15 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import pingouin as pg
-from scripts.utils import load_config
+from scripts.utils import load_config, setup_logging
+from typing import Dict, Any
+import logging
 
-def run_group_mvpa_stats(derivatives_dir, target):
+def run_group_mvpa_stats(derivatives_dir: Path, target: str) -> None:
     """
     Loads all subject MVPA results for a given target and runs group-level stats.
     """
-    print(f"--- Running Group MVPA Statistics for target: {target} ---")
+    logging.info(f"--- Running Group MVPA Statistics for target: {target} ---")
     mvpa_dir = derivatives_dir / 'mvpa'
     
     # Correctly glob for all ROI-specific result files for the target
@@ -38,21 +40,23 @@ def run_group_mvpa_stats(derivatives_dir, target):
         group_stats.append(ttest_res)
         
     summary_df = pd.concat(group_stats, ignore_index=True)
-    print("\n--- Group MVPA Results ---")
-    print(summary_df[['roi', 'mean_score', 'T', 'dof', 'p-val', 'cohen-d']])
+    logging.info("\n--- Group MVPA Results ---")
+    logging.info(summary_df[['roi', 'mean_score', 'T', 'dof', 'p-val', 'cohen-d']])
     
     # --- Save Results ---
     output_dir = derivatives_dir / 'group_level'
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_df.to_csv(output_dir / f"group_mvpa_stats_target-{target}.tsv", sep='\t', index=False)
-    print(f"\nSaved group MVPA stats to {output_dir}")
+    logging.info(f"\nSaved group MVPA stats to {output_dir}")
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run group-level statistical analysis for MVPA results.")
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to project config file')
     parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment')
     parser.add_argument('--target', type=str, required=True, help='Target variable for MVPA stats')
     args = parser.parse_args()
+
+    setup_logging()
 
     config = load_config(args.config)
     derivatives_dir = Path(config[args.env]['derivatives_dir'])

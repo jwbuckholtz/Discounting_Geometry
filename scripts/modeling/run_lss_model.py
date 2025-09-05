@@ -3,9 +3,11 @@ from pathlib import Path
 import pandas as pd
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn import image
-from scripts.utils import load_concatenated_subject_data, load_config
+from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
+from typing import Dict, Any
+import logging
 
-def run_lss_for_subject(subject_data, params):
+def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
     Runs the LSS modeling to estimate single-trial beta maps from one or more runs.
     """
@@ -16,7 +18,7 @@ def run_lss_for_subject(subject_data, params):
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
 
-    print(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
+    logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
 
     # Define the GLM using parameters from the config file
     glm = FirstLevelModel(
@@ -49,7 +51,7 @@ def run_lss_for_subject(subject_data, params):
         beta_map = glm.compute_contrast('target', output_type='effect_size')
         beta_maps.append(beta_map)
         if (i+1) % 10 == 0:
-            print(f"  - Completed LSS for trial {i+1}/{len(lss_events_df)}")
+            logging.info(f"  - Completed LSS for trial {i+1}/{len(lss_events_df)}")
 
 
     # Concatenate all beta maps into a single 4D NIfTI image
@@ -60,15 +62,17 @@ def run_lss_for_subject(subject_data, params):
     output_dir.mkdir(parents=True, exist_ok=True)
     output_filename = output_dir / f"{subject_id}_lss_beta_maps.nii.gz"
     beta_maps_img.to_filename(output_filename)
-    print(f"LSS beta maps saved to {output_filename}")
+    logging.info(f"LSS beta maps saved to {output_filename}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run LSS modeling for a single subject.")
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
     parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment to run on')
     parser.add_argument('--subject', type=str, required=True, help='The subject ID to process')
     args = parser.parse_args()
+
+    setup_logging()
 
     # --- Load Data & Config ---
     # This function now loads and prepares data from all runs for the subject
