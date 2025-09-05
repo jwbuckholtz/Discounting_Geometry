@@ -33,6 +33,9 @@ analysis_params:
   # during preprocessing (e.g., by fMRIPrep), which is standard for
   # multiband sequences.
   slice_time_ref: 0.5
+  # Spatial smoothing kernel (Full-Width at Half-Maximum) in mm.
+  # This is applied ONLY to the standard GLM. MVPA and RSA are performed
+  # on unsmoothed data to preserve fine-grained spatial patterns.
   smoothing_fwhm: 5.0
   
   # Cross-validation parameters
