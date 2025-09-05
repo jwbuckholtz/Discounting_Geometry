@@ -191,6 +191,7 @@ def main():
 
     # 1. Load data (betas and events)
     print("Loading beta maps and behavioral data...")
+    betas_path = find_lss_beta_maps(derivatives_dir, args.subject)
     beta_maps_img, events_df = load_data(args.subject, derivatives_dir)
 
     # 2. Prepare data for decoding (this is independent of the mask)
@@ -221,10 +222,8 @@ def main():
         roi_name = roi_file.name.split('.')[0] # Get a clean name, e.g., 'vmPFC' from 'vmPFC.nii.gz'
         print(f"\n--- Running analysis for ROI: {roi_name} ---")
         
-        mask_img_orig = image.load_img(str(roi_file))
-        
         # Resample the mask to match the beta maps' space
-        mask_img = resample_roi_to_betas(roi_file, beta_maps_img)
+        mask_img = resample_roi_to_betas(roi_file, betas_path)
 
         # Run the decoding with the current mask
         scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categorical)
