@@ -21,16 +21,10 @@ ml python/3.9
 source .venv/bin/activate
 
 # --- Commands ---
-echo "Running LSS Model..."
-python scripts/modeling/run_lss_model.py \
-    --subject $SUBJECT_ID \
-    --config $CONFIG_FILE \
-    --env $ENV
+echo "Running Standard GLM for ${SUBJECT_ID}"
+python scripts/modeling/run_standard_glm.py --subject "${SUBJECT_ID}" --config "config/project_config.yaml" --env "hpc"
 
-echo "Running Standard GLM..."
-python scripts/modeling/run_standard_glm.py \
-    --subject $SUBJECT_ID \
-    --config $CONFIG_FILE \
-    --env $ENV
+# echo "Running LSS Model for ${SUBJECT_ID}"
+# python scripts/modeling/run_lss_model.py --subject "${SUBJECT_ID}" --config "config/project_config.yaml" --env "hpc"
 
-echo "Modeling complete for $SUBJECT_ID."
+echo "Modeling complete for ${SUBJECT_ID}"

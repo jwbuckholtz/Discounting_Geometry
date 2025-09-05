@@ -43,7 +43,9 @@ def choice_probability(params: Tuple[float, float], S: np.ndarray, L: np.ndarray
     sv_later = hyperbolic_discount(D, L, k)
     
     # A numerically stable implementation of the softmax (logistic function)
-    prob_later = 1 / (1 + np.exp(-(sv_later - sv_sooner) / tau))
+    # Clip the exponent to prevent overflow with very small tau values
+    exponent = np.clip(-(sv_later - sv_sooner) / tau, -709, 709)
+    prob_later = 1 / (1 + np.exp(exponent))
     return prob_later
 
 def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
@@ -88,6 +90,8 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
     # Calculate pseudo-R-squared (McFadden's R-squared)
     ll_fit = -result.fun
     p_null = np.mean(choices)
+    # Clip p_null to avoid log(0) errors for subjects with no variance in choice
+    p_null = np.clip(p_null, 1e-10, 1 - 1e-10)
     ll_null = np.sum(choices * np.log(p_null) + (1 - choices) * np.log(1 - p_null))
     pseudo_r2 = 1 - (ll_fit / ll_null)
     
