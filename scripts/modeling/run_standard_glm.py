@@ -18,8 +18,15 @@ def run_standard_glm_for_subject(subject_data):
     output_dir = derivatives_dir / 'first_level_glms' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use all trials in the events dataframe, which now includes a 'run' column
+    # Add the parametric modulators directly to the events dataframe.
+    # The 'trial_type' column tells the GLM which events to modulate.
     events_df['trial_type'] = 'decision'
+    
+    # Ensure modulator columns exist for nilearn to use them
+    modulators = ['choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']
+    for mod in modulators:
+        if mod not in events_df.columns:
+            raise ValueError(f"Modulator column '{mod}' not found in events dataframe.")
     
     # Define the GLM
     glm = FirstLevelModel(
@@ -36,12 +43,15 @@ def run_standard_glm_for_subject(subject_data):
     glm.fit(bold_imgs, events=events_df, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
+    # With parametric modulation, the contrast is simply the name of the column.
+    # We also add the main 'decision' effect.
     contrasts = {
-        'choice': 'decision*choice',
-        'SVchosen': 'decision*SVchosen',
-        'SVunchosen': 'decision*SVunchosen',
-        'SVsum': 'decision*SVsum',
-        'SVdiff': 'decision*SVdiff'
+        'decision': 'decision',
+        'choice': 'choice',
+        'SVchosen': 'SVchosen',
+        'SVunchosen': 'SVunchosen',
+        'SVsum': 'SVsum',
+        'SVdiff': 'SVdiff'
     }
 
     for contrast_id, contrast_formula in contrasts.items():

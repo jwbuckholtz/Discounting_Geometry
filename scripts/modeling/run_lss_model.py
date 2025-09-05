@@ -30,13 +30,16 @@ def run_lss_for_subject(subject_data):
 
     # --- LSS Modeling ---
     # The events dataframe already contains all trials from all runs
-    lss_events_df = events_df[['onset', 'duration', 'trial_type']].copy()
-    lss_events_df['trial_type'] = lss_events_df.index.astype(str)
+    lss_events_df = events_df[['onset', 'duration']].copy()
 
     beta_maps = []
     for i in range(len(lss_events_df)):
         # Create a design matrix for the current trial vs. all others
         lss_events = lss_events_df.copy()
+        # Create a trial_type column for this specific iteration
+        # All trials are 'other' by default
+        lss_events['trial_type'] = 'other'
+        # Set the trial of interest to 'target'
         lss_events.loc[i, 'trial_type'] = 'target'
         
         # Fit GLM for the current trial across all runs
