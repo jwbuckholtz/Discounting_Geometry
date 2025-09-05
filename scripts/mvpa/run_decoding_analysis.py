@@ -10,8 +10,12 @@ from sklearn.model_selection import StratifiedKFold, KFold, StratifiedGroupKFold
 from pathlib import Path
 import warnings
 from nilearn.maskers import NiftiMasker
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC, SVR
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_data as load_decoding_data
 
 def resample_roi_to_betas(roi_path, beta_maps_path):
     """Resamples an ROI mask to the space of the beta maps."""
@@ -95,7 +99,7 @@ def prepare_decoding_data(events_df, target_variable, n_betas):
     return final_labels, valid_trials_mask, groups
 
 
-def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical):
+def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical, cv_params):
     """
     Runs the MVPA/decoding analysis using scikit-learn directly for robustness.
 
@@ -125,12 +129,12 @@ def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_
     if is_categorical:
         print("Running classification analysis with StratifiedGroupKFold...")
         model = make_pipeline(StandardScaler(), SVC(kernel='linear', class_weight='balanced'))
-        cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+        cv = StratifiedGroupKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
         scoring = 'accuracy'
     else:
         print("Running regression analysis with GroupKFold...")
         model = make_pipeline(StandardScaler(), SVR(kernel='linear'))
-        cv = GroupKFold(n_splits=5)
+        cv = GroupKFold(n_splits=cv_params['n_splits'])
         scoring = 'r2'
         
     # --- 3. Run Cross-Validation ---
@@ -178,13 +182,14 @@ def main():
     # Load configuration
     config = load_config(args.config)
     env_config = config[args.env]
+    analysis_params = config['analysis_params']
     derivatives_dir = Path(env_config['derivatives_dir'])
     fmriprep_dir = Path(env_config['fmriprep_dir'])
 
     # 1. Load data (betas and events)
     print("Loading beta maps and behavioral data...")
     # This now loads the concatenated data and run information
-    beta_maps_img, events_df = load_data(args.subject, derivatives_dir)
+    beta_maps_img, events_df = load_decoding_data(args.subject, derivatives_dir)
 
     # 2. Prepare data for decoding (this is independent of the mask)
     print(f"Preparing data for decoding target: {args.target}")
@@ -218,7 +223,7 @@ def main():
         mask_img = resample_roi_to_betas(roi_file, betas_path)
 
         # Run the decoding with the current mask
-        scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical)
+        scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical, analysis_params)
 
         # Save the results for the current mask
         output_dir = derivatives_dir / 'mvpa' / args.subject

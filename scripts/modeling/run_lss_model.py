@@ -3,9 +3,9 @@ from pathlib import Path
 import pandas as pd
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn import image
-from scripts.utils import load_concatenated_subject_data
+from scripts.utils import load_concatenated_subject_data, load_config
 
-def run_lss_for_subject(subject_data):
+def run_lss_for_subject(subject_data, params):
     """
     Runs the LSS modeling to estimate single-trial beta maps from one or more runs.
     """
@@ -18,10 +18,10 @@ def run_lss_for_subject(subject_data):
 
     print(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
 
-    # Define the GLM
+    # Define the GLM using parameters from the config file
     glm = FirstLevelModel(
-        t_r=2.0,
-        slice_time_ref=0.5,
+        t_r=params['t_r'],
+        slice_time_ref=params['slice_time_ref'],
         hrf_model='glover',
         drift_model='cosine',
         mask_img=mask_file,
@@ -70,12 +70,14 @@ def main():
     parser.add_argument('--subject', type=str, required=True, help='The subject ID to process')
     args = parser.parse_args()
 
-    # --- Load Data ---
+    # --- Load Data & Config ---
     # This function now loads and prepares data from all runs for the subject
     subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    config = load_config(args.config)
+    analysis_params = config['analysis_params']
     
     # --- Run Analysis ---
-    run_lss_for_subject(subject_data)
+    run_lss_for_subject(subject_data, analysis_params)
 
 
 if __name__ == "__main__":
