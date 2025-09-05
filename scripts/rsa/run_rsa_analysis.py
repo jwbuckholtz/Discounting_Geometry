@@ -9,11 +9,11 @@ from nilearn.maskers import NiftiMasker
 from scipy.spatial.distance import pdist, squareform, cdist
 from scipy.stats import spearmanr
 from nilearn.decoding import SearchLight
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 from pathlib import Path
 from sklearn.base import BaseEstimator
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_concatenated_subject_data
 
 def resample_roi_to_betas(roi_img, beta_maps_img):
     """Resamples an ROI mask to match the space of the beta maps."""
@@ -129,25 +129,17 @@ def run_rsa(neural_rdm, theoretical_rdms):
             
     return rsa_results
 
-def run_crossval_rsa(voxel_data, theoretical_rdms):
+def run_crossval_rsa(voxel_data, theoretical_rdms, groups):
     """
-    Performs a cross-validated RSA.
-
-    Args:
-        voxel_data (np.array): The masked voxel data (n_trials, n_voxels).
-        theoretical_rdms (dict): A dictionary of named theoretical RDMs.
-
-    Returns:
-        dict: A dictionary where keys are model names and values are arrays
-              of cross-validated Spearman correlation scores.
+    Performs a cross-validated RSA, respecting data groups (e.g., runs).
     """
     n_trials = voxel_data.shape[0]
-    kf = KFold(n_splits=10, shuffle=True, random_state=42)
+    gkf = GroupKFold(n_splits=min(5, len(np.unique(groups)))) # Folds can't exceed number of groups
     
     results = {name: [] for name in theoretical_rdms.keys()}
 
-    for fold, (train_idx, test_idx) in enumerate(kf.split(np.arange(n_trials))):
-        print(f"  - Running Fold {fold+1}/10...")
+    for fold, (train_idx, test_idx) in enumerate(gkf.split(X=np.arange(n_trials), groups=groups)):
+        print(f"  - Running Fold {fold+1}/{gkf.n_splits}...")
         
         # 1. Calculate the cross-fold neural RDM portion
         neural_rdm_part = cdist(voxel_data[train_idx], voxel_data[test_idx], metric='correlation').flatten()
@@ -156,7 +148,11 @@ def run_crossval_rsa(voxel_data, theoretical_rdms):
         for name, rdm in theoretical_rdms.items():
             if rdm is not None:
                 theoretical_rdm_part = rdm[train_idx, :][:, test_idx].flatten()
-                corr, _ = spearmanr(neural_rdm_part, theoretical_rdm_part)
+                # Ensure no NaNs from empty models
+                if np.isnan(theoretical_rdm_part).any() or np.isnan(neural_rdm_part).any():
+                    corr = np.nan
+                else:
+                    corr, _ = spearmanr(neural_rdm_part, theoretical_rdm_part)
                 results[name].append(corr)
 
     return {name: np.array(scores) for name, scores in results.items()}
@@ -308,7 +304,12 @@ def main():
 
     # 1. Load data (beta maps and events)
     print(f"Loading data for {args.subject}...")
-    beta_maps_img, events_df, mask_img = load_data(args.subject, derivatives_dir, fmriprep_dir)
+    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    beta_maps_img = image.load_img(subject_data['bold_imgs']) # needs to be loaded from path list
+    events_df = subject_data['events_df']
+    mask_img = image.load_img(subject_data['mask_file'])
+    groups = subject_data['groups']
+
 
     # --- Pre-analysis Step: Identify base valid trials (where a choice was made) ---
     base_valid_trials_mask = events_df['choice'].notna().values
@@ -344,9 +345,9 @@ def main():
             neural_rdm = create_neural_rdm(beta_maps_valid, mask_img)
             
             # For whole-brain, we will run the cross-validated RSA
-            masker = NiftiMasker(mask_img=mask_img, standardize=True)
+            masker = NiftiMasker(mask_img=mask_img, standardize=False) # standardize in pipeline if needed
             voxel_data = masker.fit_transform(beta_maps_valid)
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms)
+            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups)
             save_results(args.subject, rsa_results, output_dir, 'whole_brain')
             
     elif args.analysis_type == 'roi':
@@ -369,12 +370,12 @@ def main():
             analysis_mask_img = resample_roi_to_betas(original_roi_mask, beta_maps_img)
             
             # Extract voxel data from the ROI
-            masker = NiftiMasker(mask_img=analysis_mask_img, standardize=True)
+            masker = NiftiMasker(mask_img=analysis_mask_img, standardize=False)
             beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
             voxel_data = masker.fit_transform(beta_maps_valid)
             
             # Run the cross-validated RSA
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms)
+            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups)
             
             # Save the cross-validated results
             output_dir = derivatives_dir / 'rsa' / args.subject

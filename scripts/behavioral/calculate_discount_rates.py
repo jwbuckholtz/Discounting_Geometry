@@ -131,41 +131,44 @@ def calculate_subjective_values(data, k):
 
 def process_subject_data(subject_id, onsets_dir, derivatives_dir):
     """
-    Processes the behavioral data for a single subject.
-
-    Args:
-        subject_id (str): The BIDS subject identifier (e.g., 'sub-s061').
-        onsets_dir (str): The path to the directory containing the behavioral onset files.
-        derivatives_dir (str): The path to the derivatives directory for saving results.
-
-    Returns:
-        dict: A dictionary of the model fit results for this subject.
+    Processes all behavioral data for a single subject, handling multiple runs.
     """
-    # Transform BIDS subject ID (e.g., 'sub-s061') to onset file format (e.g., 's061')
     onset_subject_id = subject_id.replace('sub-', '')
-    events_path = onsets_dir / f'{onset_subject_id}_discountFix_events.tsv'
     
-    if not events_path.exists():
-        print(f"Warning: Events file not found for {subject_id} at {events_path}")
+    # Find all event files for this subject, which may be split by run
+    event_files = sorted(list(onsets_dir.glob(f'{onset_subject_id}*discountFix_events.tsv')))
+    
+    if not event_files:
+        print(f"Warning: No event files found for {subject_id}")
         return None
+        
+    # Load and concatenate data from all runs
+    all_runs_data = []
+    for event_file in event_files:
+        # Extract run number from filename, default to 1 if not found
+        run_part = event_file.stem.split('_run-')
+        run = int(run_part[1].split('_')[0]) if len(run_part) > 1 else 1
+        
+        run_data = pd.read_csv(event_file, sep='\t')
+        run_data['run'] = run
+        all_runs_data.append(run_data)
     
-    # Load the data
-    data = pd.read_csv(events_path, sep='\t')
+    data = pd.concat(all_runs_data, ignore_index=True)
 
-    # Fit the discount rate and temperature
+    # Fit the discount rate and temperature using data from all runs
     fit_results = fit_discount_rate(data)
     k = fit_results['k']
 
     # Calculate subjective values
     data_with_sv = calculate_subjective_values(data, k)
 
-    # Save the trial-by-trial results
+    # Save the combined, trial-by-trial results
     output_dir = derivatives_dir / 'behavioral' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f'{subject_id}_discounting_with_sv.tsv'
     data_with_sv.to_csv(output_path, sep='\t', index=False)
     
-    print(f"Processed and saved data for {subject_id}")
+    print(f"Processed and saved combined data for {subject_id} from {len(event_files)} run(s)")
     
     # Return the summary results for aggregation
     return { 'subject_id': subject_id, **fit_results }

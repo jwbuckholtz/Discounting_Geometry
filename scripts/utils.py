@@ -101,3 +101,72 @@ def load_subject_data(config_path, env, subject_id):
         "confounds_selected": confounds_selected,
         "derivatives_dir": derivatives_dir
     }
+
+def find_subject_runs(fmriprep_dir, subject_id):
+    """Finds all preprocessed BOLD files for all runs of the discountFix task."""
+    fmriprep_path = Path(fmriprep_dir)
+    subject_path = fmriprep_path / subject_id
+    run_files = []
+
+    for ses_path in sorted(subject_path.glob('ses-*')):
+        func_path = ses_path / 'func'
+        if not func_path.exists():
+            continue
+        
+        # Find all BOLD files for the task
+        bold_files = sorted(list(func_path.glob(f'{subject_id}_{ses_path.name}_task-discountFix*_desc-preproc_bold.nii.gz')))
+        
+        for bold_path in bold_files:
+            file_prefix = bold_path.name.split('_desc-preproc_bold.nii.gz')[0]
+            mask_path = func_path / f'{file_prefix}_desc-brain_mask.nii.gz'
+            confounds_prefix = bold_path.name.split('_space-')[0]
+            confounds_path = func_path / f'{confounds_prefix}_desc-confounds_timeseries.tsv'
+
+            if mask_path.exists() and confounds_path.exists():
+                run_files.append({
+                    "bold": str(bold_path),
+                    "mask": str(mask_path),
+                    "confounds": str(confounds_path)
+                })
+    
+    if not run_files:
+        raise FileNotFoundError(f"No complete BOLD/mask/confounds sets found for task 'discountFix' for {subject_id}")
+    
+    return run_files
+
+def load_concatenated_subject_data(config_path, env, subject_id):
+    """
+    Loads and concatenates all functional data for a subject across all runs.
+    """
+    config = load_config(config_path)
+    env_config = config[env]
+    derivatives_dir = Path(env_config['derivatives_dir'])
+    fmriprep_dir = Path(env_config['fmriprep_dir'])
+
+    # 1. Find all runs
+    run_files = find_subject_runs(fmriprep_dir, subject_id)
+    print(f"Found {len(run_files)} runs for subject {subject_id}")
+
+    # 2. Load and concatenate BOLD images and confounds
+    bold_imgs = [run['bold'] for run in run_files]
+    confounds_dfs = [pd.read_csv(run['confounds'], sep='\t') for run in run_files]
+
+    # 3. Load the run-aware behavioral file
+    events_file = find_behavioral_sv_file(derivatives_dir, subject_id)
+    events_df = pd.read_csv(events_file, sep='\t')
+    
+    # 4. Create the groups array for cross-validation
+    groups = events_df['run'].values
+
+    # 5. Use the mask from the first run (assuming all are aligned)
+    mask_file = run_files[0]['mask']
+
+    return {
+        "subject_id": subject_id,
+        "bold_imgs": bold_imgs, # Pass as a list of paths
+        "mask_file": mask_file,
+        "events_df": events_df,
+        "confounds_dfs": confounds_dfs, # Pass as a list of dataframes
+        "groups": groups,
+        "derivatives_dir": derivatives_dir
+    }

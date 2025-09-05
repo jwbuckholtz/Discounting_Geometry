@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = []
+test = ["pytest"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]

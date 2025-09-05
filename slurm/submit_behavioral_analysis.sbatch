@@ -48,7 +48,7 @@ echo "Using environment: $ENV"
 echo "Job started at: $(date)"
 
 python scripts/behavioral/calculate_discount_rates.py \
-    --subjects "$SUBJECT_ID" \
+    --subject "$SUBJECT_ID" \
     --config "$CONFIG_FILE" \
     --env "$ENV"
 

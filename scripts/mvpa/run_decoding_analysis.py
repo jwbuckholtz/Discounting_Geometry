@@ -6,7 +6,7 @@ import numpy as np
 from glob import glob
 from nilearn import image
 from nilearn.decoding import Decoder
-from sklearn.model_selection import StratifiedKFold, KFold
+from sklearn.model_selection import StratifiedKFold, KFold, StratifiedGroupKFold, GroupKFold
 from pathlib import Path
 import warnings
 from nilearn.maskers import NiftiMasker
@@ -92,10 +92,10 @@ def prepare_decoding_data(events_df, target_variable, n_betas):
         # For numeric data, just use the values
         final_labels = labels_series.values
 
-    return final_labels, valid_trials_mask
+    return final_labels, valid_trials_mask, groups
 
 
-def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categorical):
+def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical):
     """
     Runs the MVPA/decoding analysis using scikit-learn directly for robustness.
 
@@ -112,6 +112,7 @@ def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categori
     # --- 1. Filter Data and Apply Mask ---
     fmri_data_valid = image.index_img(beta_maps_img, valid_trials_mask)
     labels_valid = labels[valid_trials_mask]
+    groups_valid = groups[valid_trials_mask]
 
     # Use NiftiMasker to extract the time series from the ROIs
     # standardize=False is crucial to prevent data leakage across CV folds.
@@ -122,32 +123,21 @@ def run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categori
 
     # --- 2. Set up the Model and Cross-Validation ---
     if is_categorical:
-        from sklearn.svm import SVC
-        from sklearn.model_selection import StratifiedKFold
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.pipeline import make_pipeline
-
-        print("Running classification analysis...")
+        print("Running classification analysis with StratifiedGroupKFold...")
         model = make_pipeline(StandardScaler(), SVC(kernel='linear', class_weight='balanced'))
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
         scoring = 'accuracy'
     else:
-        from sklearn.svm import SVR
-        from sklearn.model_selection import KFold
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.pipeline import make_pipeline
-
-        print("Running regression analysis...")
+        print("Running regression analysis with GroupKFold...")
         model = make_pipeline(StandardScaler(), SVR(kernel='linear'))
-        cv = KFold(n_splits=5, shuffle=True, random_state=42)
+        cv = GroupKFold(n_splits=5)
         scoring = 'r2'
         
     # --- 3. Run Cross-Validation ---
-    from sklearn.model_selection import cross_val_score
-    
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring)
+        # Pass the groups to the cv iterator
+        scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, groups=groups_valid)
     
     return scores
 
@@ -193,12 +183,12 @@ def main():
 
     # 1. Load data (betas and events)
     print("Loading beta maps and behavioral data...")
-    betas_path = find_lss_beta_maps(derivatives_dir, args.subject)
+    # This now loads the concatenated data and run information
     beta_maps_img, events_df = load_data(args.subject, derivatives_dir)
 
     # 2. Prepare data for decoding (this is independent of the mask)
     print(f"Preparing data for decoding target: {args.target}")
-    labels, valid_trials_mask = prepare_decoding_data(events_df, args.target, beta_maps_img.shape[-1])
+    labels, valid_trials_mask, groups = prepare_decoding_data(events_df, args.target, beta_maps_img.shape[-1])
     is_categorical = (events_df[args.target].dtype == 'object')
 
     # 3. Determine which mask(s) to use
@@ -228,7 +218,7 @@ def main():
         mask_img = resample_roi_to_betas(roi_file, betas_path)
 
         # Run the decoding with the current mask
-        scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, is_categorical)
+        scores = run_decoding(beta_maps_img, mask_img, labels, valid_trials_mask, groups, is_categorical)
 
         # Save the results for the current mask
         output_dir = derivatives_dir / 'mvpa' / args.subject

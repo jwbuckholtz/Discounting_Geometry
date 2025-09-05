@@ -1,24 +1,24 @@
 import argparse
 from pathlib import Path
 from nilearn.glm.first_level import FirstLevelModel
-from scripts.utils import load_subject_data
+from scripts.utils import load_concatenated_subject_data
 
 def run_standard_glm_for_subject(subject_data):
     """
-    Runs a standard GLM with parametric modulators for SV variables.
+    Runs a standard GLM with parametric modulators across one or more runs.
     """
     subject_id = subject_data['subject_id']
-    bold_file = subject_data['bold_file']
+    bold_imgs = subject_data['bold_imgs']
     mask_file = subject_data['mask_file']
     events_df = subject_data['events_df']
-    confounds_selected = subject_data['confounds_selected']
+    confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
 
-    print(f"--- Running Standard GLM for {subject_id} ---")
+    print(f"--- Running Standard GLM for {subject_id} on {len(bold_imgs)} run(s) ---")
     output_dir = derivatives_dir / 'first_level_glms' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use all trials in the events dataframe
+    # Use all trials in the events dataframe, which now includes a 'run' column
     events_df['trial_type'] = 'decision'
     
     # Define the GLM
@@ -32,8 +32,8 @@ def run_standard_glm_for_subject(subject_data):
         smoothing_fwhm=5.0
     )
 
-    # Fit the GLM
-    glm.fit(bold_file, events=events_df, confounds=confounds_selected)
+    # Fit the GLM across all runs
+    glm.fit(bold_imgs, events=events_df, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
     contrasts = {
@@ -61,7 +61,7 @@ def main():
     args = parser.parse_args()
 
     # --- Load Data ---
-    subject_data = load_subject_data(args.config, args.env, args.subject)
+    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
     
     # --- Run Analysis ---
     run_standard_glm_for_subject(subject_data)
