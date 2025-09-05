@@ -27,7 +27,7 @@ hpc:
 # These parameters are used across multiple analysis scripts to ensure consistency.
 analysis_params:
   # GLM Parameters
-  t_r: 2.0
+  t_r: 0.68 # Updated from 2.0 based on new acquisition info
   slice_time_ref: 0.5
   smoothing_fwhm: 5.0
   
@@ -66,3 +66,18 @@ analysis_params:
     k_bounds: [0.000001, 1.0]
     tau_bounds: [0.000001, 5.0]
     initial_params: [0.01, 1.0]
+
+# ==============================================================================
+# MRI Acquisition Parameters
+# ==============================================================================
+mri_acquisition_params:
+  sequence: "single-echo multi-band echo-planar imaging (EPI)"
+  tr: 0.680 # in seconds
+  multiband_factor: 8
+  echo_time: 0.030 # in seconds
+  flip_angle: 53 # in degrees
+  field_of_view: 220 # in mm
+  voxel_size: [2.2, 2.2, 2.2] # isotropic, in mm
+  slices: 64
+  multiband_source: "GE"
+  phase_encoding_direction: "j"
