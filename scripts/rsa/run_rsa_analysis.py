@@ -308,32 +308,32 @@ def main():
     print(f"Loading data for {args.subject}...")
     beta_maps_img, events_df, mask_img = load_data(args.subject, derivatives_dir, fmriprep_dir)
 
-    # --- Pre-analysis Step: Identify valid trials ---
-    # This is done once, based on a column that should have no NaNs
-    valid_trials_mask = events_df['choice'].notna().values
+    # --- Pre-analysis Step: Identify base valid trials (where a choice was made) ---
+    base_valid_trials_mask = events_df['choice'].notna().values
 
     # 2. Create theoretical RDMs (do this once)
-    theoretical_rdms = {
-        'choice': create_theoretical_rdm(events_df, 'choice', valid_trials_mask),
-        'delay': create_theoretical_rdm(events_df, 'later_delay', valid_trials_mask),
-        'sv_chosen': create_theoretical_rdm(events_df, 'SVchosen', valid_trials_mask),
-        'sv_unchosen': create_theoretical_rdm(events_df, 'SVunchosen', valid_trials_mask),
-        'sv_sum': create_theoretical_rdm(events_df, 'SVsum', valid_trials_mask),
-        'sv_diff': create_theoretical_rdm(events_df, 'SVdiff', valid_trials_mask),
-    }
+    # For each variable, we ensure we only use non-NaN trials
+    theoretical_rdms = {}
+    for var in ['choice', 'later_delay', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']:
+        # Create a specific mask for the current variable, combined with the base mask
+        var_mask = events_df[var].notna().values
+        combined_mask = base_valid_trials_mask & var_mask
+        
+        # Pass the specific, combined mask to the RDM creation function
+        theoretical_rdms[var] = create_theoretical_rdm(events_df, var, combined_mask)
 
     # --- Main Analysis Logic ---
     if args.analysis_type in ['whole_brain', 'searchlight']:
         # --- Handle single-mask analyses ---
         output_dir = derivatives_dir / 'rsa' / args.subject
         
-        # Filter beta maps to only include valid trials *before* analysis
-        beta_maps_valid = image.index_img(beta_maps_img, valid_trials_mask)
+        # Filter beta maps to only include base valid trials *before* analysis
+        beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
 
         if args.analysis_type == 'searchlight':
             # --- Run Searchlight RSA ---
             print("\n--- Running Searchlight RSA ---")
-            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms, valid_trials_mask)
+            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms, base_valid_trials_mask)
             save_searchlight_maps(args.subject, searchlight_results, output_dir)
             print("Searchlight analysis complete.")
         else: # whole_brain
@@ -368,7 +368,7 @@ def main():
             
             # Extract voxel data from the ROI
             masker = NiftiMasker(mask_img=analysis_mask_img, standardize=True)
-            beta_maps_valid = image.index_img(beta_maps_img, valid_trials_mask)
+            beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
             voxel_data = masker.fit_transform(beta_maps_valid)
             
             # Run the cross-validated RSA
