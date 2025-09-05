@@ -19,6 +19,7 @@ dependencies = [
     "pytz",
     "python-dateutil",
     "six",
+    "pingouin",
 ]
 
 [project.optional-dependencies]
