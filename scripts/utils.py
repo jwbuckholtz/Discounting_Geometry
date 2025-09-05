@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 import pandas as pd
 import numpy as np
-from nilearn.glm.first_level import load_confounds_strategy
+from nilearn.interfaces.fmriprep import load_confounds_strategy
 from typing import Dict, Any, List, Tuple
 import nibabel as nib
 import logging
