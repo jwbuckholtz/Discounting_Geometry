@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import yaml
+import pandas as pd
 
 def load_config(config_path):
     """Loads the YAML config file."""
@@ -65,3 +66,37 @@ def find_fmriprep_files(fmriprep_dir, subject_id):
         f"Could not find a complete set of BOLD, mask, and confounds files for "
         f"task 'discountFix' for {subject_id} in {fmriprep_dir}"
     )
+
+def load_subject_data(config_path, env, subject_id):
+    """
+    Loads all necessary files for a single subject for first-level modeling.
+    
+    Returns a dictionary containing paths and loaded dataframes.
+    """
+    config = load_config(config_path)
+    env_config = config[env]
+    derivatives_dir = Path(env_config['derivatives_dir'])
+    fmriprep_dir = Path(env_config['fmriprep_dir'])
+
+    # Find the required fMRIPrep and behavioral files
+    bold_file, mask_file, confounds_file = find_fmriprep_files(fmriprep_dir, subject_id)
+    events_file = find_behavioral_sv_file(derivatives_dir, subject_id)
+    
+    # Load behavioral data
+    events_df = pd.read_csv(events_file, sep='\t')
+
+    # Load confounds
+    confounds_selected, _ = load_confounds_strategy(
+        bold_file,
+        denoise_strategy='simple',
+        confounds_file=confounds_file
+    )
+    
+    return {
+        "subject_id": subject_id,
+        "bold_file": bold_file,
+        "mask_file": mask_file,
+        "events_df": events_df,
+        "confounds_selected": confounds_selected,
+        "derivatives_dir": derivatives_dir
+    }
