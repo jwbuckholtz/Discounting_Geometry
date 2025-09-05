@@ -40,7 +40,7 @@ def load_data(derivatives_dir, fmriprep_dir, subject_id):
     print("Data loaded successfully.")
     return beta_map_path, behavioral_data_path, brain_mask_path
 
-def run_embedding(beta_maps_path, brain_mask_path, method='tsne', n_components=2, **kwargs):
+def run_embedding(beta_maps_img, brain_mask_img, method='tsne', n_components=2, **kwargs):
     """
     Extracts data from beta maps within a brain mask and computes a
     low-dimensional embedding.
@@ -63,8 +63,8 @@ def run_embedding(beta_maps_path, brain_mask_path, method='tsne', n_components=2
     np.ndarray
         The low-dimensional embedding of the beta maps.
     """
-    masker = NiftiMasker(mask_img=brain_mask_path, standardize=True)
-    masked_data = masker.fit_transform(beta_maps_path)
+    masker = NiftiMasker(mask_img=brain_mask_img, standardize=True)
+    masked_data = masker.fit_transform(beta_maps_img)
 
     print(f"Running {method.upper()} with {n_components} components...")
     
@@ -126,15 +126,13 @@ def main():
     filtered_betas_img = image.index_img(beta_maps_img, valid_trials_mask)
     filtered_behavioral_data = behavioral_data[valid_trials_mask].reset_index(drop=True)
 
-    # Apply the brain mask by indexing the 4D beta maps file
-    filtered_betas_img = image.index_img(beta_maps_img, valid_trials_mask)
-
     # Run embedding
     embedding = run_embedding(filtered_betas_img, brain_mask_img, method=args.method)
 
     # Prepare data for plotting
     plot_df = pd.DataFrame(embedding, columns=['Dim1', 'Dim2'])
-    plot_df[args.color_by] = behavioral_data[args.color_by].values
+    # Use the correctly filtered behavioral data for coloring
+    plot_df[args.color_by] = filtered_behavioral_data[args.color_by]
 
     # Plotting
     roi_name = brain_mask_path.stem.replace('_mask', '').replace('.nii', '')
