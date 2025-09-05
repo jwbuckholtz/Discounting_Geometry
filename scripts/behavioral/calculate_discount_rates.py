@@ -74,9 +74,10 @@ def fit_discount_rate(data: pd.DataFrame) -> Dict[str, float]:
     # Initial guesses for k and tau
     initial_params = [0.01, 1.0]
 
-    # Minimize the negative log-likelihood
+    # Minimize the negative log-likelihood using a more robust method
     result = minimize(neg_log_likelihood, initial_params, args=(S, L, D, choices),
-                      bounds=[(1e-6, None), (1e-6, None)])
+                      method='L-BFGS-B',
+                      bounds=[(1e-6, 1.0), (1e-6, 5.0)])
 
     if not result.success:
         logging.warning(f"Optimization failed. Reason: {result.message}")

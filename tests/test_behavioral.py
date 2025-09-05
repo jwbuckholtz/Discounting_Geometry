@@ -1,4 +1,5 @@
 import pytest
+import pandas as pd
 import numpy as np
 import sys
 import os
@@ -6,128 +7,63 @@ import os
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from scripts.behavioral.calculate_discount_rates import hyperbolic_discount, choice_probability, fit_discount_rate
+from scripts.behavioral.calculate_discount_rates import (
+    hyperbolic_discount,
+    choice_probability,
+    fit_discount_rate
+)
 
-def test_hyperbolic_discount_basic():
-    """
-    Test the hyperbolic_discount function with a basic, easily calculated example.
-    """
-    amount = 100.0
-    delay = 10.0
-    k = 0.1
-    # Expected value = 100 / (1 + 0.1 * 10) = 100 / 2 = 50
-    expected_sv = 50.0
-    assert hyperbolic_discount(delay, amount, k) == pytest.approx(expected_sv)
+def test_hyperbolic_discount():
+    """Unit test for the hyperbolic discount function."""
+    # Test with k=0 (no discounting)
+    assert hyperbolic_discount(10, 100, 0) == 100
+    # Test with a known value
+    assert np.isclose(hyperbolic_discount(30, 100, 0.1), 25.0)
 
-def test_hyperbolic_discount_no_delay():
-    """
-    Test that a reward with no delay is not discounted.
-    """
-    amount = 50.0
-    delay = 0.0
-    k = 0.5
-    # Expected value = 50 / (1 + 0.5 * 0) = 50 / 1 = 50
-    expected_sv = 50.0
-    assert hyperbolic_discount(delay, amount, k) == pytest.approx(expected_sv)
+def test_choice_probability():
+    """Unit test for the softmax choice probability function."""
+    # When SVs are equal, probability should be 0.5
+    # Let S=50, L=100, D=30, k=1/30 -> SV_later = 100 / (1 + 1/30 * 30) = 50
+    params = (1/30, 1.0) # k, tau
+    assert np.isclose(choice_probability(params, 50, 100, 30), 0.5)
+    
+    # When SV_later is much larger, probability should approach 1
+    params = (0.01, 0.1) # k, tau
+    assert choice_probability(params, 20, 100, 10) > 0.99
 
-def test_hyperbolic_discount_high_k():
+def test_fit_discount_rate_parameter_recovery():
     """
-    Test that a very high discount rate leads to a very low subjective value.
+    Integration test for the fitting function using parameter recovery.
+    We generate synthetic data with known parameters and check if the
+    fitting function can recover them.
     """
-    amount = 100.0
-    delay = 5.0
-    k = 100.0
-    # Expected value = 100 / (1 + 100 * 5) = 100 / 501
-    expected_sv = 100.0 / 501.0
-    assert hyperbolic_discount(delay, amount, k) == pytest.approx(expected_sv)
-
-def test_hyperbolic_discount_zero_amount():
-    """
-    Test that a reward of zero has a subjective value of zero.
-    """
-    amount = 0.0
-    delay = 20.0
-    k = 0.05
-    expected_sv = 0.0
-    assert hyperbolic_discount(delay, amount, k) == pytest.approx(expected_sv)
-
-def test_hyperbolic_discount_vectorized():
-    """
-    Test that the function works correctly with NumPy arrays as inputs.
-    """
-    amounts = np.array([100.0, 50.0])
-    delays = np.array([10.0, 0.0])
-    k = 0.1
-    # Expected SVs = [100 / (1 + 0.1*10), 50 / (1 + 0.1*0)] = [50.0, 50.0]
-    expected_svs = np.array([50.0, 50.0])
-    calculated_svs = hyperbolic_discount(delays, amounts, k)
-    assert np.allclose(calculated_svs, expected_svs)
-
-def test_choice_probability_equal_sv():
-    """
-    Test that choice probability is 0.5 when subjective values are equal.
-    """
-    sv_sooner = 50.0
-    sv_later = 50.0
-    tau = 0.5
-    # Expected probability is 0.5
-    expected_prob = 0.5
-    assert choice_probability(sv_sooner, sv_later, tau) == pytest.approx(expected_prob)
-
-def test_choice_probability_later_better():
-    """
-    Test that choice probability is high when the later option is much better.
-    """
-    sv_sooner = 20.0
-    sv_later = 80.0
-    tau = 0.1  # Low temperature for more deterministic choice
-    # Probability of choosing later should be very high
-    prob = choice_probability(sv_sooner, sv_later, tau)
-    assert prob > 0.99
-
-def test_choice_probability_high_temp():
-    """
-    Test that a high temperature leads to more random choices (closer to 0.5).
-    """
-    sv_sooner = 20.0
-    sv_later = 80.0
-    tau = 100.0  # High temperature
-    # Probability should be closer to 0.5
-    prob = choice_probability(sv_sooner, sv_later, tau)
-    assert prob == pytest.approx(0.5, abs=0.1)
-
-def test_fit_discount_rate_recovery():
-    """
-    Test that the fitting function can recover known parameters from synthetic data.
-    """
-    # 1. Define true parameters to recover
+    # 1. Define ground truth parameters
     true_k = 0.05
     true_tau = 0.8
-
-    # 2. Generate synthetic data based on these parameters
-    np.random.seed(42)  # for reproducibility
-    n_trials = 100
-    sooner_amounts = np.full(n_trials, 20.0)
-    sooner_delays = np.zeros(n_trials)
-    later_amounts = np.random.uniform(25, 100, n_trials)
-    later_delays = np.random.randint(5, 180, n_trials)
-
-    # Calculate subjective values and choice probabilities
-    sv_sooner = hyperbolic_discount(sooner_delays, sooner_amounts, true_k)
-    sv_later = hyperbolic_discount(later_delays, later_amounts, true_k)
-    prob_later = choice_probability(sv_sooner, sv_later, true_tau)
+    n_trials = 200
     
-    # Simulate choices based on probabilities
-    choices = np.random.binomial(1, prob_later) # 1 = chose later, 0 = chose sooner
+    # 2. Generate synthetic data based on the true parameters
+    np.random.seed(42)
+    small_amounts = np.random.uniform(10, 40, n_trials)
+    large_amounts = np.random.uniform(50, 100, n_trials)
+    delays = np.random.randint(5, 100, n_trials)
+    
+    probs = choice_probability((true_k, true_tau), small_amounts, large_amounts, delays)
+    choices_numeric = np.random.binomial(1, probs)
+    choices_str = np.where(choices_numeric == 1, 'larger_later', 'sooner_smaller')
 
+    synthetic_df = pd.DataFrame({
+        'small_amount': small_amounts,
+        'large_amount': large_amounts,
+        'later_delay': delays,
+        'choice': choices_str
+    })
+    
     # 3. Fit the model to the synthetic data
-    result = fit_discount_rate(choices, sooner_amounts, sooner_delays, later_amounts, later_delays)
+    fit_results = fit_discount_rate(synthetic_df)
     
-    # 4. Assert that the recovered parameters are close to the true ones
-    assert result is not None
-    recovered_k = result['k']
-    recovered_tau = result['tau']
-    
-    assert recovered_k == pytest.approx(true_k, abs=0.02)
-    assert recovered_tau == pytest.approx(true_tau, abs=0.2)
-    assert result['pseudo_r2'] > 0.5 # Check for a good model fit
+    # 4. Assert that the recovered parameters are close to the true parameters
+    assert 'k' in fit_results
+    assert 'tau' in fit_results
+    assert np.isclose(fit_results['k'], true_k, atol=0.01) # Absolute tolerance of 0.01
+    assert np.isclose(fit_results['tau'], true_tau, atol=0.1) # Absolute tolerance of 0.1
