@@ -37,11 +37,22 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     derivatives_dir = subject_data['derivatives_dir']
 
     logging.info(f"--- Running Standard GLM for {subject_id} on {len(bold_imgs)} run(s) ---")
-    output_dir = derivatives_dir / 'first_level_glms' / subject_id
+    output_dir = derivatives_dir / 'standard_glm' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Convert categorical 'choice' column to numeric (0 or 1) for modulation
+    # This must be done before the convolution loop.
+    if 'choice' in events_df.columns:
+        events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
+
     # --- Manually Create Parametric Regressors ---
-    n_scans = image.load_img(bold_imgs[0]).shape[3]
+    # Determine the number of scans from the first run's BOLD image
+    try:
+        n_scans = image.load_img(bold_imgs[0]).shape[3]
+    except Exception as e:
+        logging.error(f"Could not determine number of scans from bold_imgs: {e}")
+        raise
+
     # Use the modulators from the config file
     modulators = params['glm']['contrasts']
     
