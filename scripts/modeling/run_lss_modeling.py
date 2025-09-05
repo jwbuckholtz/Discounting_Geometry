@@ -5,12 +5,12 @@ import pandas as pd
 import numpy as np
 from glob import glob
 from nilearn import image, masking
-from nilearn.glm.first_level import FirstLevelModel
+from nilearn.glm.first_level import FirstLevelModel, make_first_level_design_matrix
 from pathlib import Path
 
 from scripts.utils import load_config, find_fmriprep_files, find_behavioral_sv_file
 
-def run_lss_modeling(subject_id, bold_file, mask_file, confounds_file, events_df):
+def run_lss_modeling_for_subject(subject_id, config_path, env):
     """
     Runs the LSS modeling to estimate single-trial beta maps.
 
@@ -29,15 +29,13 @@ def run_lss_modeling(subject_id, bold_file, mask_file, confounds_file, events_df
     tr = image.load_img(bold_file).header.get_zooms()[-1].item()
 
     # Load confounds and select a subset for the model
-    confounds = pd.read_csv(confounds_file, sep='\t')
-    # Using a common set of confound regressors
-    confound_vars = [
-        'trans_x', 'trans_y', 'trans_z',
-        'rot_x', 'rot_y', 'rot_z',
-        'a_comp_cor_00', 'a_comp_cor_01', 'a_comp_cor_02', 'a_comp_cor_03', 'a_comp_cor_04'
-    ]
-    # Fill any NaNs with the mean of the column
-    confounds_selected = confounds[confound_vars].fillna(confounds[confound_vars].mean())
+    # Load fMRIPrep confounds
+    # Using load_confounds_strategy is more robust to fMRIPrep outputs
+    confounds_selected, _ = nilearn.glm.first_level.load_confounds_strategy(
+        bold_file,
+        denoise_strategy='simple',
+        confounds_file=confounds_file
+    )
 
     # --- 2. Prepare for LSS Iteration ---
     # Add a trial_type column for nilearn, all trials are 'stim' for now
@@ -108,7 +106,7 @@ def main():
 
     # 4. Run the LSS model
     print(f"Starting LSS modeling for {args.subject}...")
-    beta_maps = run_lss_modeling(args.subject, bold_file, mask_file, confounds_file, events_df)
+    beta_maps = run_lss_modeling_for_subject(args.subject, args.config, args.env)
 
     # 5. Save the resulting beta maps
     output_dir = derivatives_dir / 'lss_betas' / args.subject
