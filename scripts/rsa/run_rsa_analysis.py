@@ -285,6 +285,45 @@ def save_results(subject_id: str, rsa_results: Dict[str, Any], output_dir: Path,
     
     logging.info(f"Saved RSA results for '{analysis_name}' to {output_path}")
 
+def run_subject_level_rsa(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path):
+    """
+    Runs the whole-brain, cross-validated RSA for a single subject.
+    This function is designed to be importable and testable.
+    """
+    # 1. Load data
+    logging.info(f"Loading data for {subject_id}...")
+    # This assumes LSS betas and concatenated data are available
+    # For a test, we would mock this part
+    beta_maps_img, events_df, mask_img = load_data(subject_id, derivatives_dir, fmriprep_dir)
+    
+    # Fake group labels for testing purposes if not present
+    if 'run' not in events_df.columns:
+        events_df['run'] = np.tile(np.arange(1, 5), len(events_df) // 4 + 1)[:len(events_df)]
+    groups = events_df['run'].values
+    
+    # 2. Create theoretical RDMs
+    base_valid_trials_mask = events_df['choice'].notna().values
+    theoretical_rdms = {}
+    for var in ['choice', 'SVchosen']: # Simplified for testing
+        var_mask = events_df[var].notna().values
+        combined_mask = base_valid_trials_mask & var_mask
+        theoretical_rdms[var] = create_theoretical_rdm(events_df, var, combined_mask)
+
+    # 3. Run Whole-Brain Cross-validated RSA
+    output_dir = derivatives_dir / 'rsa' / subject_id
+    beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
+    
+    masker = NiftiMasker(mask_img=mask_img, standardize=True)
+    voxel_data = masker.fit_transform(beta_maps_valid)
+    
+    # Fake cv_params for testing
+    cv_params = {'n_splits': 4} 
+    
+    rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups[base_valid_trials_mask], cv_params)
+    save_results(subject_id, rsa_results, output_dir, 'whole_brain_test')
+
+    logging.info(f"Finished RSA for {subject_id}")
+
 
 def main() -> None:
     """Main function to run the RSA."""

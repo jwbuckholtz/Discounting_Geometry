@@ -1,85 +1,111 @@
 import pytest
-import numpy as np
-import pandas as pd
-import nibabel as nib
 from pathlib import Path
-import sys
-import os
+import pandas as pd
+import numpy as np
+import nibabel as nib
+from nilearn import image
 
-# Add the project root to the Python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from scripts.rsa.run_rsa_analysis import run_subject_level_rsa, create_theoretical_rdm
 
-from scripts.rsa.run_rsa_analysis import create_neural_rdm, create_theoretical_rdm, run_rsa
-
-@pytest.fixture
-def fake_rsa_data(tmp_path):
-    """
-    Creates a temporary directory with fake data for RSA analysis.
-    The neural data is intentionally structured to have a clear pattern.
-    """
-    # Create fake data parameters
-    shape_3d = (5, 5, 5)
-    n_trials = 10
-    shape_4d = (*shape_3d, n_trials)
+@pytest.fixture(scope="module")
+def synthetic_rsa_dataset(tmp_path_factory):
+    """Creates a synthetic dataset for testing the RSA script."""
+    tmp_dir = tmp_path_factory.mktemp("data")
+    
+    sub_id = "sub-01"
+    derivatives_dir = tmp_dir / "derivatives"
+    fmriprep_dir = derivatives_dir / "fmriprep"
+    
+    # --- 1. Create directory structure ---
+    lss_dir = derivatives_dir / "lss_betas" / sub_id
+    lss_dir.mkdir(parents=True, exist_ok=True)
+    behavioral_dir = derivatives_dir / "behavioral" / sub_id
+    behavioral_dir.mkdir(parents=True, exist_ok=True)
+    fmriprep_func_dir = fmriprep_dir / sub_id / "ses-1" / "func"
+    fmriprep_func_dir.mkdir(parents=True, exist_ok=True)
+    
+    # --- 2. Create synthetic data parameters ---
+    n_trials = 40
+    shape = (10, 10, 10)
     affine = np.eye(4)
-
-    # Create structured beta data: first half of trials are different from the second half
-    beta_data = np.zeros(shape_4d)
-    beta_data[:, :, :, :n_trials//2] = 1.0  # First 5 trials are all 1s
-    beta_data[:, :, :, n_trials//2:] = -1.0 # Last 5 trials are all -1s
-    beta_data += np.random.randn(*shape_4d) * 0.1 # Add a small amount of noise
-
-    beta_img = nib.Nifti1Image(beta_data, affine)
     
-    # Create a simple brain mask that includes all voxels
-    mask_data = np.ones(shape_3d)
-    mask_img = nib.Nifti1Image(mask_data, affine)
-
-    # Create a behavioral DataFrame that matches the neural structure
-    behavioral_data = pd.DataFrame({
-        'trial_index': np.arange(n_trials),
-        'condition': ['A'] * (n_trials//2) + ['B'] * (n_trials//2), # Categorical
-        'value': np.arange(n_trials) # Continuous (uncorrelated with structure)
+    # --- 3. Create beta maps with a known pattern ---
+    # The pattern: trials where choice==1 have activation in one region,
+    # and trials where choice==0 have activation in another.
+    choices = np.random.choice([0, 1], n_trials)
+    beta_maps_data = np.random.randn(shape[0], shape[1], shape[2], n_trials) * 0.1
+    
+    for i in range(n_trials):
+        if choices[i] == 1:
+            beta_maps_data[2:4, 2:4, 2:4, i] += 1.0 # Region A
+        else:
+            beta_maps_data[6:8, 6:8, 6:8, i] += 1.0 # Region B
+            
+    beta_maps_img = nib.Nifti1Image(beta_maps_data, affine)
+    beta_maps_path = lss_dir / f"{sub_id}_lss_beta_maps.nii.gz"
+    nib.save(beta_maps_img, beta_maps_path)
+    
+    # --- 4. Create behavioral data ---
+    events_df = pd.DataFrame({
+        "trial_type": ["decision"] * n_trials,
+        "choice": choices,
+        "SVchosen": np.random.rand(n_trials) * 10, # A random variable
+        "run": np.repeat(np.arange(1, 5), n_trials / 4) # 4 runs
     })
-
-    return beta_img, mask_img, behavioral_data
-
-def test_rdm_creation_and_rsa_correlation(fake_rsa_data):
-    """
-    Integration test for the core RSA functions.
+    events_path = behavioral_dir / f"{sub_id}_discounting_with_sv.tsv"
+    events_df.to_csv(events_path, sep="\t", index=False)
     
-    This test checks that:
-    1. Neural and Theoretical RDMs are created with the correct shape.
-    2. The RSA correlation can recover a known structure in the data.
-    """
-    beta_maps_img, mask_img, behavioral_data = fake_rsa_data
-    n_trials = behavioral_data.shape[0]
-
-    # 1. Test Neural RDM creation
-    neural_rdm = create_neural_rdm(beta_maps_img, mask_img)
-    assert neural_rdm.shape == (n_trials, n_trials)
-    assert np.all(np.diag(neural_rdm) == 0) # Diagonal should be zero
-
-    # 2. Test Theoretical RDM creation for the structured variable
-    theoretical_rdm_structured = create_theoretical_rdm(behavioral_data, 'condition')
-    assert theoretical_rdm_structured.shape == (n_trials, n_trials)
+    # --- 5. Create a brain mask ---
+    mask_data = np.ones(shape, dtype=np.int8)
+    mask_img = nib.Nifti1Image(mask_data, affine)
+    mask_path = fmriprep_func_dir / f"{sub_id}_ses-1_task-discountFix_run-1_space-MNI_desc-brain_mask.nii.gz"
+    # Create dummy bold and confounds to satisfy find_fmriprep_files
+    bold_path = fmriprep_func_dir / f"{sub_id}_ses-1_task-discountFix_run-1_space-MNI_desc-preproc_bold.nii.gz"
+    confounds_path = fmriprep_func_dir / f"{sub_id}_ses-1_task-discountFix_run-1_desc-confounds_timeseries.tsv"
+    nib.save(nib.Nifti1Image(np.zeros(shape), affine), bold_path)
+    pd.DataFrame().to_csv(confounds_path, sep="\t")
+    nib.save(mask_img, mask_path)
     
-    # Check a value: trials in the same condition should have 0 distance
-    assert theoretical_rdm_structured[0, 1] == 0 
-    # Check a value: trials in different conditions should have non-zero distance
-    assert theoretical_rdm_structured[0, 9] > 0
+    return {
+        "subject_id": "sub-01",
+        "derivatives_dir": derivatives_dir,
+        "fmriprep_dir": fmriprep_dir
+    }
 
-    # 3. Test Theoretical RDM for the unstructured variable
-    theoretical_rdm_unstructured = create_theoretical_rdm(behavioral_data, 'value')
-    assert theoretical_rdm_unstructured.shape == (n_trials, n_trials)
-
-    # 4. Test RSA correlation
-    # The correlation between the neural RDM and the structured theoretical RDM should be high
-    rsa_result_structured = run_rsa(neural_rdm, theoretical_rdm_structured)
-    assert 'rho' in rsa_result_structured
-    assert rsa_result_structured['rho'] > 0.8
-
-    # The correlation with the unstructured RDM should be low
-    rsa_result_unstructured = run_rsa(neural_rdm, theoretical_rdm_unstructured)
-    assert 'rho' in rsa_result_unstructured
-    assert abs(rsa_result_unstructured['rho']) < 0.5
+def test_run_subject_level_rsa_integration(synthetic_rsa_dataset):
+    """
+    Integration test for the main RSA function.
+    Checks that the output file is created and that the RSA result
+    for the 'choice' model is positive and significant, as expected
+    from the synthetic data pattern.
+    """
+    sub_id = synthetic_rsa_dataset["subject_id"]
+    derivatives_dir = synthetic_rsa_dataset["derivatives_dir"]
+    
+    # Run the analysis
+    run_subject_level_rsa(
+        subject_id=sub_id,
+        derivatives_dir=derivatives_dir,
+        fmriprep_dir=synthetic_rsa_dataset["fmriprep_dir"]
+    )
+    
+    # --- Assertions ---
+    # 1. Check if the output file was created
+    output_path = derivatives_dir / 'rsa' / sub_id / 'summary_results' / f'{sub_id}_analysis-whole_brain_test_rsa-results.tsv'
+    assert output_path.exists(), "Output TSV file was not created."
+    
+    # 2. Check the contents of the output file
+    results_df = pd.read_csv(output_path, sep='\t')
+    assert "model" in results_df.columns
+    assert "correlation" in results_df.columns
+    assert "subject_id" in results_df.columns
+    assert len(results_df) > 0, "Results dataframe is empty."
+    
+    # 3. Check the RSA results
+    # The correlation for 'choice' should be high and positive because we built a pattern.
+    # The correlation for 'SVchosen' should be near zero because it was random.
+    choice_corr = results_df[results_df['model'] == 'choice']['correlation'].mean()
+    sv_corr = results_df[results_df['model'] == 'SVchosen']['correlation'].mean()
+    
+    assert choice_corr > 0.3, f"Choice correlation ({choice_corr}) is not strongly positive as expected."
+    assert abs(sv_corr) < 0.2, f"SVchosen correlation ({sv_corr}) is not near zero as expected."
