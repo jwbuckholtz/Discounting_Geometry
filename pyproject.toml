@@ -13,7 +13,6 @@ dependencies = [
     "scikit-learn",
     "matplotlib",
     "seaborn",
-    "uv",
     "pyyaml",
     "pytest",
     "pytz",

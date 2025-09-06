@@ -1,88 +1,100 @@
 import argparse
 from pathlib import Path
 import pandas as pd
-from nilearn.glm.second_level import SecondLevelModel
-from nilearn import plotting
-import matplotlib.pyplot as plt
-from scripts.utils import load_config, setup_logging
-from typing import Dict, Any
+from nilearn.glm.second_level import SecondLevelModel, make_second_level_design_matrix
+from nilearn.plotting import plot_stat_map, plot_glass_brain
 import logging
 
-def run_group_glm(derivatives_dir: Path, contrast_id: str, n_subjects: int) -> None:
+from scripts.utils import load_config, setup_logging
+
+def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
     """
-    Runs a group-level (second-level) GLM analysis for a given contrast.
+    Runs a group-level (second-level) GLM analysis for a specified contrast.
+
+    Args:
+        config_path (str): Path to the project configuration file.
+        env (str): The environment specified in the config file ('local' or 'hpc').
+        contrast (str): The name of the contrast to analyze (e.g., 'SVchosen').
     """
-    logging.info(f"--- Running Group-Level GLM for contrast: {contrast_id} ---")
-
-    # --- 1. Find all first-level contrast maps ---
-    first_level_dir = Path(derivatives_dir) / 'first_level_glms'
-    contrast_maps = sorted(list(first_level_dir.glob(f"sub-*/sub-*_contrast-{contrast_id}_map.nii.gz")))
+    setup_logging()
     
-    if not contrast_maps:
-        raise FileNotFoundError(f"No contrast maps found for '{contrast_id}' in {first_level_dir}")
+    # --- 1. Load Configuration and Set Up Paths ---
+    config = load_config(config_path)
+    env_config = config[env]
+    derivatives_dir = Path(env_config['derivatives_dir'])
+    glm_output_dir = derivatives_dir / 'standard_glm'
+    group_level_output_dir = derivatives_dir / 'group_level' / contrast
+    group_level_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logging.info(f"Starting group-level analysis for contrast: '{contrast}'")
+    logging.info(f"First-level GLM outputs expected in: {glm_output_dir}")
+    logging.info(f"Group-level outputs will be saved to: {group_level_output_dir}")
+
+    # --- 2. Find All First-Level Contrast Maps ---
+    # Find all subject-specific output directories from the first-level GLM
+    subject_dirs = [d for d in glm_output_dir.iterdir() if d.is_dir() and d.name.startswith('sub-')]
     
-    logging.info(f"Found {len(contrast_maps)} contrast maps for {len(n_subjects)} subjects.")
-    if len(contrast_maps) != len(n_subjects):
-        logging.warning("Number of contrast maps does not match number of subjects in BIDS dir.")
+    first_level_maps = []
+    for sub_dir in subject_dirs:
+        # The contrast map from the standard GLM is a z-map
+        contrast_map_path = sub_dir / 'z_maps' / f'{contrast}_zmap.nii.gz'
+        if contrast_map_path.exists():
+            first_level_maps.append(str(contrast_map_path))
+        else:
+            logging.warning(f"Could not find contrast map for {sub_dir.name}. Skipping.")
 
+    if len(first_level_maps) < 2:
+        logging.error(f"Found fewer than 2 contrast maps ({len(first_level_maps)} found). Cannot run group-level analysis. Aborting.")
+        return
 
-    # --- 2. Define and Fit Second-Level Model ---
-    # A simple one-sample t-test against zero.
-    design_matrix = pd.DataFrame([1] * len(contrast_maps), columns=['intercept'])
-    
-    second_level_model = SecondLevelModel(smoothing_fwhm=8.0)
-    second_level_model = second_level_model.fit(contrast_maps, design_matrix=design_matrix)
+    logging.info(f"Found {len(first_level_maps)} first-level contrast maps to include in the analysis.")
 
-    # --- 3. Compute Group-Level Contrast ---
+    # --- 3. Define and Fit the Second-Level Model ---
+    # The design matrix for a simple group-level t-test is just an intercept
+    design_matrix = pd.DataFrame([1] * len(first_level_maps), columns=['intercept'])
+
+    # Initialize and fit the second-level GLM
+    second_level_model = SecondLevelModel(smoothing_fwhm=8.0, verbose=1)
+    second_level_model = second_level_model.fit(first_level_maps, design_matrix=design_matrix)
+
+    # --- 4. Compute the Group-Level Contrast and Save Results ---
+    # Compute the t-statistic for the intercept (i.e., the group mean)
     z_map = second_level_model.compute_contrast(output_type='z_score')
     
-    # --- 4. Save Results ---
-    output_dir = Path(derivatives_dir) / 'group_level_glms'
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = group_level_output_dir / f'group_{contrast}_zmap.nii.gz'
+    z_map.to_filename(output_path)
+    logging.info(f"Saved group-level z-map to: {output_path}")
+
+    # --- 5. Generate and Save Diagnostic Plots ---
+    # Plot the unthresholded statistical map
+    plot_stat_map(
+        z_map,
+        title=f"Group Level: {contrast} (Unthresholded)",
+        output_file=group_level_output_dir / f'group_{contrast}_zmap_unthresholded.png',
+        display_mode='z',
+        cut_coords=8,
+        colorbar=True
+    )
     
-    z_map_filename = output_dir / f"group_contrast-{contrast_id}_zmap.nii.gz"
-    z_map.to_filename(z_map_filename)
-    logging.info(f"Saved group z-map to {z_map_filename}")
-
-    # --- 5. Create and Save Plots ---
-    # Use nilearn's plotting functions to create a statistical map plot
-    plotting.plot_stat_map(
+    # Plot a glass brain view
+    plot_glass_brain(
         z_map,
-        threshold=3.1,  # Corresponds to p < 0.001 uncorrected
-        title=f"Group Level: {contrast_id}",
-        output_file=output_dir / f"group_contrast-{contrast_id}_zmap.png"
+        title=f"Group Level: {contrast} (Glass Brain)",
+        output_file=group_level_output_dir / f'group_{contrast}_glass_brain.png',
+        colorbar=True,
+        threshold=3.1 # Standard z-score threshold for p < 0.001
     )
-    # Create a glass brain plot
-    plotting.plot_glass_brain(
-        z_map,
-        threshold=3.1,
-        title=f"Group Level: {contrast_id} (Glass Brain)",
-        output_file=output_dir / f"group_contrast-{contrast_id}_glassbrain.png"
-    )
-    plt.close('all') # Close plots to free memory
-    logging.info(f"Saved result plots to {output_dir}")
+    logging.info("Generated and saved diagnostic plots.")
+    logging.info(f"Group-level analysis for contrast '{contrast}' complete.")
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run group-level GLM analysis.")
-    parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
-    parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment to run on')
-    parser.add_argument('--contrast', type=str, required=True, help='The name of the contrast to analyze (e.g., SVdiff)')
+def main():
+    parser = argparse.ArgumentParser(description="Run a second-level (group) GLM analysis.")
+    parser.add_argument('--config', default='config/project_config.yaml', help='Path to the project configuration file.')
+    parser.add_argument('--env', default='hpc', choices=['local', 'hpc'], help="Environment to use from the config file.")
+    parser.add_argument('--contrast', required=True, help="The name of the contrast to analyze at the group level.")
     args = parser.parse_args()
-
-    setup_logging()
-
-    config = load_config(args.config)
-    env_config = config[args.env]
-    derivatives_dir = Path(env_config['derivatives_dir'])
-    bids_dir = Path(env_config['bids_dir'])
     
-    # Get subject list to verify against found contrast maps
-    subjects = [s.name for s in bids_dir.glob('sub-*') if s.is_dir()]
+    run_group_level_glm(args.config, args.env, args.contrast)
 
-    run_group_glm(derivatives_dir, args.contrast, subjects)
-    logging.info("Group-level analysis finished successfully.")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
