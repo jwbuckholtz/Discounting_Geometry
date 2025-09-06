@@ -56,8 +56,8 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     # Use the modulators from the config file
     modulators = params['glm']['contrasts']
     
-    # Create a copy to avoid modifying the original
-    run_confounds = confounds_dfs[0].copy()
+    # Create a copy of the nuisance regressors to build our design matrix
+    design_matrix = confounds_dfs[0].copy()
     
     for mod in modulators:
         # For the main 'decision' event, we convolve a vector of ones
@@ -66,7 +66,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         
         if mod in events_df.columns:
             convolved_reg = convolve_with_hrf(events_df, mod, n_scans, params['t_r'])
-            run_confounds[mod] = convolved_reg
+            design_matrix[mod] = convolved_reg
         else:
             logging.warning(f"Modulator column '{mod}' not found in events_df. Skipping.")
             
@@ -80,11 +80,12 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         smoothing_fwhm=params['smoothing_fwhm']
     )
 
-    # All regressors are now in the confounds, so no events are needed
-    glm.fit(bold_imgs, events=None, confounds=[run_confounds])
+    # All regressors are now in the design_matrix, so we pass it directly.
+    # nilearn ignores 'events' and 'confounds' when 'design_matrices' is provided.
+    glm.fit(bold_imgs, design_matrices=[design_matrix])
 
     # --- Define and Compute Contrasts ---
-    contrasts = {c: c for c in modulators if c in run_confounds.columns}
+    contrasts = {c: c for c in modulators if c in design_matrix.columns}
 
     for contrast_id, contrast_formula in contrasts.items():
         try:
