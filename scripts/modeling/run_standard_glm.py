@@ -40,8 +40,15 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     output_dir = derivatives_dir / 'standard_glm' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- Pre-computation Data Cleaning ---
+    # Fill any NaNs in the behavioral modulator columns with 0.
+    # This handles cases where behavioral model fitting may have failed.
+    modulator_cols = [m for m in params['glm']['contrasts'] if m in events_df.columns]
+    if events_df[modulator_cols].isnull().values.any():
+        logging.warning(f"NaNs found in modulator columns for {subject_id}. Filling with 0.")
+        events_df[modulator_cols] = events_df[modulator_cols].fillna(0)
+
     # Convert categorical 'choice' column to numeric (0 or 1) for modulation
-    # This must be done before the convolution loop.
     if 'choice' in events_df.columns:
         events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
 
@@ -58,6 +65,10 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # Create a copy of the nuisance regressors to build our design matrix
     design_matrix = confounds_dfs[0].copy()
+    # Fill any NaNs from the confounds file (e.g., in framewise_displacement)
+    if design_matrix.isnull().values.any():
+        logging.warning(f"NaNs found in confounds for {subject_id}. Filling with 0.")
+        design_matrix = design_matrix.fillna(0)
     
     for mod in modulators:
         # For the main 'decision' event, we convolve a vector of ones
