@@ -7,6 +7,9 @@ ENV="hpc"
 SBATCH_TEMPLATE="slurm/templates/submit_rsa_template.sbatch"
 ANALYSIS_TYPES=("whole_brain" "searchlight")
 
+# --- Load Environment ---
+ml python/3.9
+
 # --- Read paths from config ---
 BIDS_DIR=$(python -c "import yaml; f=open('$CONFIG_FILE'); config=yaml.safe_load(f); print(config['$ENV']['bids_dir'])")
 

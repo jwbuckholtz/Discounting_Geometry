@@ -12,7 +12,6 @@ ENV="hpc"
 SBATCH_TEMPLATE="slurm/submit_lss_model.sbatch"
 
 # --- Load Environment ---
-# Load the python module to ensure the config can be read correctly.
 ml python/3.9
 
 # --- Argument Parsing ---

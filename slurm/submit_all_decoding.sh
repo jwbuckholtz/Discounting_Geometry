@@ -6,6 +6,9 @@ CONFIG_FILE="config/project_config.yaml"
 ENV="hpc"
 SBATCH_TEMPLATE="slurm/templates/submit_decoding_template.sbatch"
 
+# --- Load Environment ---
+ml python/3.9
+
 # --- Read paths and targets from config ---
 BIDS_DIR=$(python -c "import yaml; f=open('$CONFIG_FILE'); config=yaml.safe_load(f); print(config['$ENV']['bids_dir'])")
 DERIVATIVES_DIR=$(python -c "import yaml; f=open('$CONFIG_FILE'); config=yaml.safe_load(f); print(config['$ENV']['derivatives_dir'])")
