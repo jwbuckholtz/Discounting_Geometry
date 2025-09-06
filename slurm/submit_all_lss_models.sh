@@ -11,6 +11,10 @@ CONFIG_FILE="config/project_config.yaml"
 ENV="hpc"
 SBATCH_TEMPLATE="slurm/submit_lss_model.sbatch"
 
+# --- Load Environment ---
+# Load the python module to ensure the config can be read correctly.
+ml python/3.9
+
 # --- Argument Parsing ---
 while [[ "$#" -gt 0 ]]; do
     case $1 in
