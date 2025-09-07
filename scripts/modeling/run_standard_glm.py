@@ -17,7 +17,14 @@ def convolve_with_hrf(events_df: pd.DataFrame, modulator: str, n_scans: int, t_r
     regressor = np.zeros(n_scans)
     for _, trial in events_df.iterrows():
         onset_scan = int(trial['onset'] / t_r)
-        regressor[onset_scan] = trial[modulator]
+        # Safety check to prevent IndexError for events outside the scan time
+        if onset_scan < n_scans:
+            regressor[onset_scan] = trial[modulator]
+        else:
+            logging.warning(
+                f"Trial with onset {trial['onset']} is outside the scan time "
+                f"({n_scans * t_r}s). Skipping event for modulator '{modulator}'."
+            )
         
     # Canonical HRF
     hrf = gamma.pdf(np.arange(0, 32, t_r), a=6, scale=1, loc=0)
@@ -52,35 +59,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     if 'choice' in events_df.columns:
         events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
 
-    # --- Manually Create Parametric Regressors ---
-    # Determine the number of scans from the first run's BOLD image
-    try:
-        n_scans = image.load_img(bold_imgs[0]).shape[3]
-    except Exception as e:
-        logging.error(f"Could not determine number of scans from bold_imgs: {e}")
-        raise
-
-    # Use the modulators from the config file
-    modulators = params['glm']['contrasts']
-    
-    # Create a copy of the nuisance regressors to build our design matrix
-    design_matrix = confounds_dfs[0].copy()
-    # Fill any NaNs from the confounds file (e.g., in framewise_displacement)
-    if design_matrix.isnull().values.any():
-        logging.warning(f"NaNs found in confounds for {subject_id}. Filling with 0.")
-        design_matrix = design_matrix.fillna(0)
-    
-    for mod in modulators:
-        # For the main 'decision' event, we convolve a vector of ones
-        if mod == 'decision':
-            events_df['decision'] = 1 
-        
-        if mod in events_df.columns:
-            convolved_reg = convolve_with_hrf(events_df, mod, n_scans, params['t_r'])
-            design_matrix[mod] = convolved_reg
-        else:
-            logging.warning(f"Modulator column '{mod}' not found in events_df. Skipping.")
-            
+    # --- GLM Setup ---
     glm = FirstLevelModel(
         t_r=params['t_r'],
         slice_time_ref=params['slice_time_ref'],
@@ -91,21 +70,62 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         smoothing_fwhm=params['smoothing_fwhm']
     )
 
-    # All regressors are now in the design_matrix, so we pass it directly.
-    # nilearn ignores 'events' and 'confounds' when 'design_matrices' is provided.
-    glm.fit(bold_imgs, design_matrices=[design_matrix])
+    # --- Process Each Run Independently ---
+    design_matrices = []
+    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
+        run_number = i + 1
+        logging.info(f"  - Processing run {run_number}/{len(bold_imgs)}")
+
+        # Determine the number of scans for this specific run
+        n_scans = image.load_img(bold_img).shape[3]
+        
+        # Isolate events for the current run
+        run_events_df = events_df[events_df['run'] == run_number]
+
+        # Use the modulators from the config file
+        modulators = params['glm']['contrasts']
+        
+        # Create the design matrix for this run
+        design_matrix = confounds_df.copy()
+        if design_matrix.isnull().values.any():
+            logging.warning(f"NaNs found in confounds for run {run_number}. Filling with 0.")
+            design_matrix = design_matrix.fillna(0)
+        
+        for mod in modulators:
+            if mod == 'decision':
+                # Create a temporary 'decision' column for convolution for this run's events
+                run_events_df_copy = run_events_df.copy()
+                run_events_df_copy['decision'] = 1
+                convolved_reg = convolve_with_hrf(run_events_df_copy, 'decision', n_scans, params['t_r'])
+            elif mod in run_events_df.columns:
+                convolved_reg = convolve_with_hrf(run_events_df, mod, n_scans, params['t_r'])
+            else:
+                logging.warning(f"Modulator column '{mod}' not found in events_df for run {run_number}. Skipping.")
+                continue
+            
+            design_matrix[mod] = convolved_reg
+
+        design_matrices.append(design_matrix)
+            
+    # --- Fit the GLM with all runs ---
+    glm.fit(bold_imgs, design_matrices=design_matrices)
 
     # --- Define and Compute Contrasts ---
-    contrasts = {c: c for c in modulators if c in design_matrix.columns}
+    # The design matrix from the last run is used to check for columns, as they are consistent.
+    final_design_matrix = design_matrices[-1]
+    contrasts = {c: c for c in params['glm']['contrasts'] if c in final_design_matrix.columns}
 
     for contrast_id, contrast_formula in contrasts.items():
         try:
-            contrast_map = glm.compute_contrast(contrast_formula, output_type='effect_size')
-            contrast_filename = output_dir / f"{subject_id}_contrast-{contrast_id}_map.nii.gz"
-            contrast_map.to_filename(contrast_filename)
-            logging.info(f"Saved contrast map to {contrast_filename}")
+            # Nilearn automatically computes contrasts across all runs
+            z_map = glm.compute_contrast(contrast_formula, output_type='z_score')
+            output_filename = output_dir / 'z_maps' / f"{contrast_id}_zmap.nii.gz"
+            output_filename.parent.mkdir(parents=True, exist_ok=True)
+            z_map.to_filename(output_filename)
+            logging.info(f"Saved z-map to {output_filename}")
+
         except ValueError:
-            logging.warning(f"Contrast '{contrast_id}' not found. Skipping.")
+            logging.warning(f"Contrast '{contrast_id}' could not be computed. It might be all zeros. Skipping.")
 
 
 def main() -> None:
