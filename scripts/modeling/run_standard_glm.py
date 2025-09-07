@@ -122,7 +122,14 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             output_filename = output_dir / 'z_maps' / f"{contrast_id}_zmap.nii.gz"
             output_filename.parent.mkdir(parents=True, exist_ok=True)
             z_map.to_filename(output_filename)
-            logging.info(f"Saved z-map to {output_filename}")
+            logging.info(f"Saved z-map to: {output_filename.resolve()}")
+
+            # --- Filesystem Sanity Check ---
+            # Verify that the file exists on the filesystem *from the compute node*
+            if output_filename.exists():
+                logging.info(f"  [SUCCESS] File check passed for {output_filename.name}")
+            else:
+                logging.error(f"  [FAILURE] File check failed. File not found at {output_filename.resolve()} after saving.")
 
         except ValueError:
             logging.warning(f"Contrast '{contrast_id}' could not be computed. It might be all zeros. Skipping.")
