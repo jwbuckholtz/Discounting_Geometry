@@ -358,6 +358,22 @@ def main() -> None:
     groups = subject_data['groups']
 
 
+    # --- CRITICAL FIX: Normalize onsets to be relative to the start of each run ---
+    # The onset times in the behavioral files are cumulative across the session.
+    # We must create a new events dataframe where onsets are relative to their run's start time.
+    corrected_events_list = []
+    for run_number in sorted(events_df['run'].unique()):
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+        if not run_events_df.empty:
+            first_onset_in_run = run_events_df['onset'].min()
+            run_events_df['onset'] -= first_onset_in_run
+            logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
+            corrected_events_list.append(run_events_df)
+    
+    # Overwrite the original events_df with the corrected one
+    events_df = pd.concat(corrected_events_list)
+    
+
     # --- Pre-analysis Step: Identify base valid trials (where a choice was made) ---
     base_valid_trials_mask = events_df['choice'].notna().values
 

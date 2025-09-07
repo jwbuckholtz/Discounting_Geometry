@@ -80,7 +80,18 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         n_scans = image.load_img(bold_img).shape[3]
         
         # Isolate events for the current run
-        run_events_df = events_df[events_df['run'] == run_number]
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+
+        # --- CRITICAL FIX: Normalize onsets to be relative to the start of the run ---
+        # The onset times in the behavioral files are likely cumulative across the session.
+        # We must subtract the time of the first trial of this run from all onsets in this run.
+        if not run_events_df.empty:
+            first_onset_in_run = run_events_df['onset'].min()
+            run_events_df['onset'] -= first_onset_in_run
+            logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
+        else:
+            logging.warning(f"No events found for run {run_number}. Skipping.")
+            continue
 
         # Use the modulators from the config file
         modulators = params['glm']['contrasts']

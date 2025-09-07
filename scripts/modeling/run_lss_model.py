@@ -20,6 +20,21 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
 
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
 
+    # --- CRITICAL FIX: Normalize onsets to be relative to the start of each run ---
+    # The onset times in the behavioral files are cumulative across the session.
+    # We must create a new events dataframe where onsets are relative to their run's start time.
+    corrected_events_list = []
+    for run_number in sorted(events_df['run'].unique()):
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+        if not run_events_df.empty:
+            first_onset_in_run = run_events_df['onset'].min()
+            run_events_df['onset'] -= first_onset_in_run
+            logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
+            corrected_events_list.append(run_events_df)
+    
+    # Overwrite the original events_df with the corrected one
+    events_df = pd.concat(corrected_events_list)
+
     # --- Pre-computation Data Cleaning ---
     # Fill any NaNs from the confounds files to prevent crashes.
     # Use a list comprehension to create a new list of cleaned dataframes.
