@@ -41,29 +41,33 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         signal_scaling=False,
     )
 
-    # --- LSS Modeling ---
-    # The events dataframe already contains all trials from all runs
-    lss_events_df = events_df[['onset', 'duration']].copy()
-
+    # --- LSS Modeling: Iterate Through Each Trial ---
     beta_maps = []
-    for i in range(len(lss_events_df)):
-        # Create a design matrix for the current trial vs. all others
-        lss_events = lss_events_df.copy()
-        # Create a trial_type column for this specific iteration
-        # All trials are 'other' by default
-        lss_events['trial_type'] = 'other'
-        # Set the trial of interest to 'target'
-        lss_events.loc[i, 'trial_type'] = 'target'
+    # Get a list of all trial indices from the main events dataframe
+    trial_indices = events_df.index.tolist()
+
+    for trial_idx in trial_indices:
+        # Isolate the run number for the current trial
+        trial_run = events_df.loc[trial_idx, 'run']
         
-        # Fit GLM for the current trial across all runs
-        glm.fit(bold_imgs, events=lss_events, confounds=cleaned_confounds_dfs)
+        # Create the LSS events dataframe for this specific trial
+        # All other trials (even in other runs) are modeled as a single 'other' regressor
+        lss_events_df = events_df[['onset', 'duration', 'run']].copy()
+        lss_events_df['trial_type'] = 'other'
+        lss_events_df.loc[trial_idx, 'trial_type'] = f'trial_{trial_idx}'
 
-        # Get the beta map for the target trial
-        beta_map = glm.compute_contrast('target', output_type='effect_size')
+        # --- Run-Specific Fitting for LSS ---
+        # Although nilearn's LSS implementation can handle multi-run data implicitly
+        # by matching onsets to the correct run's timeline, we still need to provide
+        # the BOLD images and confounds as a list.
+        glm.fit(bold_imgs, events=lss_events_df, confounds=cleaned_confounds_dfs)
+        
+        # Compute the contrast for the single target trial
+        beta_map = glm.compute_contrast(f'trial_{trial_idx}', output_type='effect_size')
         beta_maps.append(beta_map)
-        if (i+1) % 10 == 0:
-            logging.info(f"  - Completed LSS for trial {i+1}/{len(lss_events_df)}")
 
+        if (trial_idx + 1) % 10 == 0:
+            logging.info(f"  - Completed LSS for trial {trial_idx + 1}/{len(trial_indices)}")
 
     # Concatenate all beta maps into a single 4D NIfTI image
     beta_maps_img = image.concat_imgs(beta_maps)
