@@ -18,7 +18,7 @@ hpc:
   bids_dir: /oak/stanford/groups/russpold/data/uh2/aim1/BIDS/
   derivatives_dir: /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output
   fmriprep_dir: /oak/stanford/groups/russpold/data/uh2/aim1/derivatives/fmriprep/
-  onsets_dir: "/oak/stanford/groups/russpold/data/uh2/aim1/onsets"
+  onsets_dir: /oak/stanford/groups/russpold/data/uh2/aim1/onsets
   # Add other HPC-specific paths as needed
 
 # ==============================================================================
