@@ -20,6 +20,17 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
 
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
 
+    # --- Pre-computation Data Cleaning ---
+    # Fill any NaNs from the confounds files to prevent crashes.
+    # Use a list comprehension to create a new list of cleaned dataframes.
+    cleaned_confounds_dfs = []
+    for conf_df in confounds_dfs:
+        if conf_df.isnull().values.any():
+            logging.warning(f"NaNs found in confounds for {subject_id}. Filling with 0.")
+            cleaned_confounds_dfs.append(conf_df.fillna(0))
+        else:
+            cleaned_confounds_dfs.append(conf_df)
+
     # Define the GLM using parameters from the config file
     glm = FirstLevelModel(
         t_r=params['t_r'],
@@ -45,7 +56,7 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         lss_events.loc[i, 'trial_type'] = 'target'
         
         # Fit GLM for the current trial across all runs
-        glm.fit(bold_imgs, events=lss_events, confounds=confounds_dfs)
+        glm.fit(bold_imgs, events=lss_events, confounds=cleaned_confounds_dfs)
 
         # Get the beta map for the target trial
         beta_map = glm.compute_contrast('target', output_type='effect_size')
