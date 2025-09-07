@@ -38,3 +38,6 @@ slurm/logs/
 
 # Credentials and secrets
 .secrets/
+
+# Log files
+logs/
