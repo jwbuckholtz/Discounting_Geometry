@@ -19,14 +19,10 @@ source /path/to/your/venv/bin/activate
 # --- Subject List ---
 # List all the subjects you need to process.
 SUBJECT_LIST=(
-    sub-s061
     sub-s604
-    sub-s599
     sub-s605
     sub-s606
     sub-s607
-    sub-s646
-    sub-s647
 )
 
 # --- Job Logic ---
