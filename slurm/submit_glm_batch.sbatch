@@ -10,6 +10,10 @@
 #SBATCH --cpus-per-task=2                 # 2 CPUs
 #SBATCH --array=0-7                       # 8 tasks (for 8 subjects), indexed 0 through 7
 
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd $SLURM_SUBMIT_DIR
+
 # --- Environment Setup ---
 # Load the base Python module. This is necessary for the virtual environment to work.
 module load python/3.9.0
