@@ -14,7 +14,7 @@
 # Activate your Python environment here.
 # Replace this with the actual path to your virtual environment's activate script.
 # For example: source /home/users/joshuawb/Code/my_project/.venv/bin/activate
-source /path/to/your/venv/bin/activate
+source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 
 # --- Subject List ---
 # List all the subjects you need to process.
