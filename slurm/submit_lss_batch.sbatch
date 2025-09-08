@@ -19,9 +19,15 @@ NUM_SUBJECTS=$(find derivatives/behavioral -maxdepth 1 -type d -name "sub-*" | w
 # Set the array size to be the number of subjects, minus 1 (for 0-based indexing)
 #SBATCH --array=0-$(($NUM_SUBJECTS - 1))
 
-# --- IMPORTANT ---
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd $SLURM_SUBMIT_DIR
+
+# --- Environment Setup ---
+# Load the base Python module. This is necessary for the virtual environment to work.
+module load python/3.9.0
+
 # Activate your Python environment.
-# Replace this with the actual path to your virtual environment's activate script.
 source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 
 # --- Subject List ---

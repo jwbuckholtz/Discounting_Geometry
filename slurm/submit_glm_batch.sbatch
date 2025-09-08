@@ -10,19 +10,28 @@
 #SBATCH --cpus-per-task=2                 # 2 CPUs
 #SBATCH --array=0-7                       # 8 tasks (for 8 subjects), indexed 0 through 7
 
-# --- IMPORTANT ---
-# Activate your Python environment here.
-# Replace this with the actual path to your virtual environment's activate script.
-# For example: source /home/users/joshuawb/Code/my_project/.venv/bin/activate
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd $SLURM_SUBMIT_DIR
+
+# --- Environment Setup ---
+# Load the base Python module. This is necessary for the virtual environment to work.
+module load python/3.9.0
+
+# Activate your Python environment.
 source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 
 # --- Subject List ---
 # List all the subjects you need to process.
 SUBJECT_LIST=(
+    sub-s599
+    sub-s600
     sub-s604
     sub-s605
     sub-s606
     sub-s607
+    sub-s646
+    sub-s647
 )
 
 # --- Job Logic ---
