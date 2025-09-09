@@ -8,7 +8,10 @@
 #SBATCH --nodes=1                         # 1 node
 #SBATCH --ntasks=1                        # 1 task
 #SBATCH --cpus-per-task=2                 # 2 CPUs
-#SBATCH --array=0-$(($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort | wc -l) - 1))
+# --- SBATCH Array Directive ---
+# Set a high-level upper bound for the number of subjects.
+# The script will exit gracefully if the task ID is out of bounds.
+#SBATCH --array=0-199
 
 # --- Shell Setup ---
 # Change to the directory where you are submitting the script from
@@ -26,12 +29,13 @@ source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 ALL_SUBJECTS=($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
-# --- SBATCH Array Directive ---
-# We dynamically set the array size based on the number of subjects found.
-# The last index is NUM_SUBJECTS - 1.
-#SBATCH --array=0-$(($NUM_SUBJECTS - 1))
-
 # --- Job Logic ---
+# Check if the current task ID is valid for the number of subjects we have.
+if [ "$SLURM_ARRAY_TASK_ID" -ge "$NUM_SUBJECTS" ]; then
+    echo "Task ID $SLURM_ARRAY_TASK_ID is out of bounds for subject list of size $NUM_SUBJECTS. Exiting."
+    exit 0
+fi
+
 # Use the SLURM task ID to select the correct subject from the list.
 CURRENT_SUBJECT=${ALL_SUBJECTS[$SLURM_ARRAY_TASK_ID]}
 
