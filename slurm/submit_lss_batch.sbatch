@@ -31,7 +31,7 @@ source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 
 # --- Subject List ---
 # Create a list of all subject IDs from the behavioral directory
-ALL_SUBJECTS=($(find derivatives/behavioral -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
+ALL_SUBJECTS=($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
 # --- Job Logic ---
