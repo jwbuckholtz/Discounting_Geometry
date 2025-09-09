@@ -10,7 +10,7 @@ from sklearn.model_selection import StratifiedKFold, KFold, StratifiedGroupKFold
 from pathlib import Path
 import warnings
 from nilearn.maskers import NiftiMasker
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
@@ -113,6 +113,34 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
 
     return final_labels, valid_trials_mask, groups, is_categorical
 
+def get_estimator(estimator_name: str, is_categorical: bool) -> Pipeline:
+    """
+    Gets a scikit-learn estimator pipeline by name.
+    The lookup is case-insensitive.
+    """
+    # Define available estimators with lowercase keys for case-insensitive matching
+    estimators = {
+        'svc': SVC(kernel='linear', class_weight='balanced'),
+        'svr': SVR(kernel='linear'),
+        'logisticregression': LogisticRegression(penalty='l2', class_weight='balanced', max_iter=1000),
+        'ridge': Ridge(),
+        'randomforestclassifier': RandomForestClassifier(class_weight='balanced'),
+        'randomforestregressor': RandomForestRegressor()
+    }
+    
+    model = estimators.get(estimator_name.lower())
+    
+    if model is None:
+        raise ValueError(f"Unknown estimator '{estimator_name}'. Available options are: {list(estimators.keys())}")
+    
+    # Basic check to ensure a classifier is used for classification and vice versa
+    is_classifier = hasattr(model, 'predict_proba') or isinstance(model, SVC)
+    if is_categorical and not is_classifier:
+        logging.warning(f"Estimator '{estimator_name}' is not a classifier but the target is categorical.")
+    elif not is_categorical and is_classifier:
+        logging.warning(f"Estimator '{estimator_name}' is a classifier but the target is not categorical.")
+
+    return make_pipeline(StandardScaler(), model)
 
 def run_decoding(
     beta_maps_img: nib.Nifti1Image,
@@ -167,26 +195,22 @@ def run_decoding(
         else:
             cv = GroupKFold(**cv_params)
     else:
+        # If no groups, check n_splits against number of samples
+        n_samples = len(labels_valid)
+        if cv_params['n_splits'] > n_samples:
+            logging.warning(
+                f"Requested {cv_params['n_splits']} CV splits, but only {n_samples} samples are available. "
+                f"Setting n_splits to {n_samples}."
+            )
+            cv_params['n_splits'] = n_samples
+
         if is_categorical:
             cv = StratifiedKFold(**cv_params)
         else:
             cv = KFold(**cv_params)
 
     # --- 3. Set up the ML model ---
-    # Define available estimators
-    estimators = {
-        'SVC': SVC(kernel='linear', class_weight='balanced'),
-        'SVR': SVR(kernel='linear'),
-        'LogisticRegression': LogisticRegression(penalty='l2', class_weight='balanced'),
-        'Ridge': Ridge(),
-        'RandomForestClassifier': RandomForestClassifier(class_weight='balanced'),
-        'RandomForestRegressor': RandomForestRegressor()
-    }
-    
-    if estimator not in estimators:
-        raise ValueError(f"Unknown estimator '{estimator}'. Available options are: {list(estimators.keys())}")
-    
-    model = make_pipeline(StandardScaler(), estimators[estimator])
+    model = get_estimator(estimator, is_categorical)
 
     # --- 4. Run Cross-Validation ---
     logging.info(f"Running {cv_params['n_splits']}-fold cross-validation with '{estimator}' and '{scoring}' scoring...")
@@ -204,7 +228,7 @@ def run_decoding(
     return scores
 
 
-def save_results(subject_id: str, target_variable: str, scores: np.ndarray, output_dir: Path, roi_name: str) -> None:
+def save_results(subject_id: str, target_variable: str, scores: np.ndarray, output_dir: Path, roi_name: str, estimator: str, scoring: str) -> None:
     """
     Saves the decoding results to a file.
     """
@@ -216,7 +240,7 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
         'roi': roi_name
     })
     
-    output_filename = f'{subject_id}_target-{target_variable}_roi-{roi_name}_decoding-scores.tsv'
+    output_filename = f'{subject_id}_target-{target_variable}_roi-{roi_name}_estimator-{estimator}_scoring-{scoring}_decoding-scores.tsv'
     output_path = output_dir / output_filename
     results_df.to_csv(output_path, sep='\t', index=False)
     
@@ -276,7 +300,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
     
     # --- 5. Save Results ---
     output_dir = derivatives_dir / "mvpa" / subject_id
-    save_results(subject_id, target, scores, output_dir, roi_name='whole_brain')
+    save_results(subject_id, target, scores, output_dir, roi_name='whole_brain', estimator=analysis_params['estimator'], scoring=analysis_params['scoring'])
     
 def main():
     """
@@ -292,19 +316,26 @@ def main():
     config = load_config(args.config)
     paths = config[args.env]
     derivatives_dir = Path(paths['derivatives_dir'])
-    fmriprep_dir = Path(paths['fmriprep_dir']) # Use the dedicated path
+    fmriprep_dir = Path(paths['fmriprep_dir'])
     
+    # Use the correct config structure: analysis_params -> mvpa
+    analysis_params = config['analysis_params']
+
     # Determine which targets to run
-    targets_to_run = [args.target] if args.target else config['mvpa']['classification']['target_variables'] + config['mvpa']['regression']['target_variables']
+    if args.target:
+        targets_to_run = [args.target]
+    else:
+        targets_to_run = analysis_params['mvpa']['classification']['target_variables'] + \
+                         analysis_params['mvpa']['regression']['target_variables']
     
     for target in targets_to_run:
         try:
             run_subject_level_decoding(
                 subject_id=args.subject_id,
                 derivatives_dir=derivatives_dir,
-                fmriprep_dir=fmriprep_dir, # Pass it through
+                fmriprep_dir=fmriprep_dir,
                 target=target,
-                params=config
+                params=analysis_params # Pass the correct sub-dict
             )
         except Exception as e:
             logging.error(f"Failed to run decoding for target '{target}'. Error: {e}")

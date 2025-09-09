@@ -178,62 +178,63 @@ class RSASearchlightEstimator(BaseEstimator):
     def __init__(self):
         self.theoretical_rdm_ = None # Initialize to None
 
-    def fit(self, X, y, **kwargs):
+    def fit(self, X, y, theoretical_rdm=None, **kwargs):
         """
-        Fit the RSA model. In this context, 'y' is the theoretical RDM.
-        We store it for the scoring phase.
+        Fit the RSA model. We ignore X and y, and instead store the
+        theoretical_rdm that is passed as a fit_param.
         """
-        self.theoretical_rdm_ = y
+        if theoretical_rdm is None:
+            raise ValueError("A theoretical_rdm must be provided to the fit method.")
+        self.theoretical_rdm_ = theoretical_rdm
         return self
 
     def score(self, X, y, **kwargs):
         """
         Calculate the RSA score (Spearman correlation) for a single sphere.
         'X' is the neural data for the sphere (n_trials x n_voxels).
-        'y' is ignored here because the theoretical RDM was passed during fit.
         """
         # 1. Create the neural RDM for this sphere
-        # Using correlation distance, as is common
+        # CRITICAL FIX: The distance should be computed between trials (rows), not voxels (columns)
         try:
-            neural_rdm_flat = pdist(X.T, metric='correlation')
+            neural_rdm_flat = pdist(X, metric='correlation')
         except ValueError:
-            # Handle spheres with zero variance (e.g., outside the brain)
+            # Handle spheres with zero variance
             return 0.0
 
         # 2. Correlate with the single theoretical RDM
-        # We use Spearman's rank correlation
         correlation, _ = spearmanr(neural_rdm_flat, self.theoretical_rdm_)
         
-        # Handle potential NaNs if RDMs are constant
         return correlation if not np.isnan(correlation) else 0.0
 
     def get_params(self, deep=True):
         return {}
 
-def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndarray, groups: np.ndarray, mask_img: nib.Nifti1Image, cv_folds: int) -> nib.Nifti1Image:
+def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndarray, groups: np.ndarray, mask_img: nib.Nifti1Image, params: Dict[str, Any]) -> nib.Nifti1Image:
     """Runs a searchlight RSA analysis."""
     
-    cv = GroupKFold(n_splits=cv_folds)
+    cv = GroupKFold(n_splits=params['cv_folds'])
     
-    # The estimator now only takes a single theoretical RDM
     estimator = RSASearchlightEstimator()
     
     searchlight = SearchLight(
         mask_img=mask_img,
         estimator=estimator,
-        radius=5, # 5mm radius spheres
+        radius=params['searchlight_radius'],
         cv=cv,
         n_jobs=-1,
         verbose=1
     )
     
-    # Pass the single theoretical RDM to the estimator via the SearchLight's fit method
-    searchlight.fit(beta_maps_img, theoretical_rdm, groups=groups)
+    # We pass a dummy 'y' variable for scikit-learn compatibility.
+    # The actual theoretical RDM is passed as a fit_param to the estimator.
+    n_trials = beta_maps_img.shape[-1]
+    dummy_y = np.arange(n_trials)
     
-    # The scores are now a 1D array of floats
+    # Nilearn's Searchlight passes extra parameters to the estimator's fit method
+    searchlight.fit(beta_maps_img, dummy_y, groups=groups, theoretical_rdm=theoretical_rdm)
+    
     scores_1d = searchlight.scores_
     
-    # Use the masker from the searchlight to convert 1D scores back to a 3D image
     return searchlight.masker_.inverse_transform(scores_1d)
 
 
@@ -379,12 +380,13 @@ def main() -> None:
             
             if args.analysis_type == 'searchlight':
                 logging.info(f"--- Running Searchlight RSA for model: {model_name} ---")
+                # Pass the entire rsa params dict to the function
                 searchlight_map = run_searchlight_rsa(
                     beta_maps_valid, 
                     theoretical_rdm, 
                     groups_valid, 
                     mask_img,
-                    analysis_params['rsa']['cv_folds']
+                    analysis_params['rsa']
                 )
                 
                 # Save the resulting map

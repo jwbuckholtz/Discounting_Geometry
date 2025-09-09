@@ -69,16 +69,15 @@ def synthetic_dataset(tmp_path_factory):
     nib.save(beta_maps_4d, beta_map_path)
 
     # --- Create a corresponding events file ---
+    # The loader function now expects this specific naming convention
+    beh_dir = tmp_path / "derivatives" / "behavioral" / f"sub-{sub_id}"
+    beh_dir.mkdir(parents=True, exist_ok=True)
+    events_path = beh_dir / f"sub-{sub_id}_discounting_with_sv.tsv"
     events_df = pd.DataFrame({
         'trial_type': conditions,
         'SVchosen': np.random.randn(n_trials), # Add a continuous variable
         'run': np.repeat([1, 2], n_trials // 2)
     })
-    
-    # Save a fake behavioral file in the derivatives dir, which is what the script expects
-    beh_dir = tmp_path / "derivatives" / "behavioral" / f"sub-{sub_id}"
-    beh_dir.mkdir(parents=True, exist_ok=True)
-    events_path = beh_dir / f"sub-{sub_id}_task-discounting_with_sv.tsv"
     events_df.to_csv(events_path, sep='\t', index=False)
     
     # --- Create mock analysis parameters ---
@@ -86,16 +85,16 @@ def synthetic_dataset(tmp_path_factory):
         'mvpa': {
             'classification': {
                 'target_variables': ['trial_type'],
-                'estimator': 'LinearSVC',
+                'estimator': 'SVC', # Use uppercase to match code
                 'scoring': 'accuracy',
-                'cv_folds': 2, # Use the correct flat key
+                'cv_folds': 2,
                 'random_state': 42
             },
             'regression': {
                 'target_variables': ['SVDiff'],
-                'estimator': 'LinearSVR',
+                'estimator': 'SVR', # Use uppercase to match code
                 'scoring': 'r2',
-                'cv_folds': 2 # Use the correct flat key
+                'cv_folds': 2
             }
         }
     }
@@ -123,13 +122,15 @@ def test_run_subject_level_decoding_integration(synthetic_dataset):
     run_subject_level_decoding(
         subject_id=f"sub-{synthetic_dataset['subject_id']}",
         derivatives_dir=synthetic_dataset["derivatives_dir"],
-        fmriprep_dir=synthetic_dataset["fmriprep_dir"], # Pass the correct fmriprep_dir
+        fmriprep_dir=synthetic_dataset["fmriprep_dir"],
         target='trial_type',
         params=params
     )
     
-    # Assert that the output file was created
-    expected_output_path = output_dir / f"sub-{synthetic_dataset['subject_id']}_target-trial_type_roi-whole_brain_decoding-scores.tsv"
+    # --- Assertions ---
+    output_dir = synthetic_dataset["derivatives_dir"] / "mvpa" / f"sub-{synthetic_dataset['subject_id']}"
+    # The output filename now contains more metadata
+    expected_output_path = output_dir / f"sub-{synthetic_dataset['subject_id']}_target-trial_type_roi-whole_brain_estimator-SVC_scoring-accuracy_decoding-scores.tsv"
     assert expected_output_path.exists()
     
     # Assert that the output file has the correct contents

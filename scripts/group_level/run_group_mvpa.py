@@ -6,54 +6,67 @@ from scripts.utils import load_config, setup_logging
 from typing import Dict, Any
 import logging
 
-def run_group_mvpa_stats(derivatives_dir: Path, target: str) -> None:
+def run_group_mvpa_stats(derivatives_dir: Path, analysis_params: Dict[str, Any]) -> None:
     """
-    Loads all subject MVPA results for a given target and runs group-level stats.
+    Loads all subject MVPA results and runs group-level stats,
+    intelligently selecting the null hypothesis based on the scoring metric.
     """
-    logging.info(f"--- Running Group MVPA Statistics for target: {target} ---")
+    logging.info(f"--- Running Group MVPA Statistics ---")
     mvpa_dir = derivatives_dir / 'mvpa'
     
-    # Correctly glob for all ROI-specific result files for the target
-    decoding_files = sorted(list(mvpa_dir.glob(f"sub-*/**/sub-*_target-{target}_roi-*_decoding-scores.tsv")))
+    # Glob for all possible result files
+    decoding_files = sorted(list(mvpa_dir.glob(f"sub-*/**/*decoding-scores.tsv")))
     
     if not decoding_files:
-        raise FileNotFoundError(f"No decoding result files found for target '{target}' in {mvpa_dir}.")
+        raise FileNotFoundError(f"No decoding result files found in {mvpa_dir}.")
         
-    # Load and concatenate all results
     all_results_df = pd.concat([pd.read_csv(f, sep='\t') for f in decoding_files], ignore_index=True)
     
-    # Calculate mean accuracy for each subject and ROI
-    subject_means = all_results_df.groupby(['subject_id', 'roi'])['scores'].mean().reset_index()
+    # We need to find out which targets are classification vs regression
+    class_targets = analysis_params['mvpa']['classification']['target_variables']
     
-    # --- Perform t-test for each ROI ---
-    rois = subject_means['roi'].unique()
+    # Calculate mean score for each subject, roi, and target
+    subject_means = all_results_df.groupby(['subject_id', 'roi', 'target_variable', 'scoring']).scores.mean().reset_index()
+    
+    # --- Perform t-test for each ROI and Target combination ---
     group_stats = []
-
-    for roi in rois:
-        roi_scores = subject_means[subject_means['roi'] == roi]['scores']
-        # Determine chance level based on target
-        chance_level = 0.5 if target == 'choice' else 0.0
+    for (roi, target, scoring), data in subject_means.groupby(['roi', 'target_variable', 'scoring']):
+        scores = data['scores']
         
-        ttest_res = pg.ttest(roi_scores, chance_level, alternative='greater')
+        # Determine the correct chance level for the t-test
+        popmean = 0.0 # Default for metrics like R^2
+        if scoring == 'accuracy':
+            # Assuming binary classification for now
+            popmean = 0.5
+        elif scoring not in ['r2', 'roc_auc']:
+            logging.warning(f"T-test for scoring metric '{scoring}' is compared against 0, but this may not be appropriate. "
+                            "Consider a permutation test for a more accurate null hypothesis.")
+
+        ttest_res = pg.ttest(scores, popmean, alternative='greater')
         ttest_res['roi'] = roi
-        ttest_res['mean_score'] = roi_scores.mean()
+        ttest_res['target_variable'] = target
+        ttest_res['scoring'] = scoring
+        ttest_res['mean_score'] = scores.mean()
         group_stats.append(ttest_res)
         
+    if not group_stats:
+        logging.warning("No data available to perform group-level statistics.")
+        return
+
     summary_df = pd.concat(group_stats, ignore_index=True)
     logging.info("\n--- Group MVPA Results ---")
-    logging.info(summary_df[['roi', 'mean_score', 'T', 'dof', 'p-val', 'cohen-d']])
+    print(summary_df[['roi', 'target_variable', 'scoring', 'mean_score', 'T', 'dof', 'p-val', 'cohen-d']].round(3).to_string(index=False))
     
     # --- Save Results ---
     output_dir = derivatives_dir / 'group_level'
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary_df.to_csv(output_dir / f"group_mvpa_stats_target-{target}.tsv", sep='\t', index=False)
+    summary_df.to_csv(output_dir / "group_mvpa_stats_summary.tsv", sep='\t', index=False)
     logging.info(f"\nSaved group MVPA stats to {output_dir}")
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run group-level statistical analysis for MVPA results.")
+    parser = argparse.ArgumentParser(description="Run group-level statistical analysis for all MVPA results.")
     parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to project config file')
     parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment')
-    parser.add_argument('--target', type=str, required=True, help='Target variable for MVPA stats')
     args = parser.parse_args()
 
     setup_logging()
@@ -61,7 +74,7 @@ def main() -> None:
     config = load_config(args.config)
     derivatives_dir = Path(config[args.env]['derivatives_dir'])
 
-    run_group_mvpa_stats(derivatives_dir, args.target)
+    run_group_mvpa_stats(derivatives_dir, config['analysis_params'])
 
 if __name__ == "__main__":
     main()
