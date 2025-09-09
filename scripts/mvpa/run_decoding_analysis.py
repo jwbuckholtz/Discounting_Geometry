@@ -96,6 +96,15 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
         # For numeric data, just use the values
         final_labels = labels_series.values
 
+    # --- 4. Get Grouping Variable (for CV) ---
+    if 'run' in events_df.columns:
+        groups = events_df['run'].values
+    else:
+        # If no run information, we cannot use GroupKFold.
+        # We'll pass None and the downstream function should handle it.
+        logging.warning("No 'run' column found in events data. Cannot use GroupKFold for cross-validation.")
+        groups = None
+
     return final_labels, valid_trials_mask, groups
 
 
@@ -116,8 +125,10 @@ def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labe
     # --- 1. Filter Data and Apply Mask ---
     fmri_data_valid = image.index_img(beta_maps_img, valid_trials_mask)
     labels_valid = labels[valid_trials_mask]
-    groups_valid = groups[valid_trials_mask]
-
+    
+    # Only try to group if groups are available
+    groups_valid = groups[valid_trials_mask] if groups is not None else None
+    
     # Use NiftiMasker to extract the time series from the ROIs
     # standardize=False is crucial to prevent data leakage across CV folds.
     # Standardization is correctly handled within the scikit-learn pipeline.
@@ -180,12 +191,12 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
     beta_maps_img = image.load_img(lss_betas_path)
     events_df = pd.read_csv(events_path, sep='\t')
     
-    # --- 2. Determine Analysis Type & Get Parameters ---
-    if target not in events_df.columns:
-        raise ValueError(f"Target '{target}' not found in events file.")
+    # --- 2. Prepare Data (The robust way) ---
+    labels, valid_trials, groups = prepare_decoding_data(events_df, target, n_betas=beta_maps_img.shape[-1])
     
-    is_categorical = events_df[target].dtype == 'object' or events_df[target].nunique() < 3
-    
+    # --- 3. Determine Analysis Type & Get Parameters ---
+    is_categorical = np.issubdtype(labels.dtype, np.integer) and len(np.unique(labels[valid_trials])) < 3
+
     if is_categorical:
         analysis_params = params['mvpa']['classification']
         model = SVC(kernel='linear', class_weight='balanced')
@@ -195,39 +206,27 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
         model = SVR(kernel='linear')
         logging.info(f"Treating '{target}' as a REGRESSION target.")
         
-    # --- 3. Prepare Data ---
-    y = events_df[target].values
-    groups = events_df['run'].values if 'run' in events_df.columns else None
-    valid_trials = ~pd.isna(y)
-    
-    X_img = image.index_img(beta_maps_img, valid_trials)
-    y = y[valid_trials]
-    if groups is not None:
-        groups = groups[valid_trials]
-
     # --- 4. Run Decoding ---
     # We use the whole-brain mask for this simplified script
     _, mask_path, _ = find_fmriprep_files(derivatives_dir / 'fmriprep', subject_id)
     
-    decoder = Decoder(
-        estimator=model,
-        mask=mask_path,
-        standardize=True,
-        scoring=analysis_params['scoring'],
-        cv=analysis_params['cv_folds']
+    # Resample the mask to match the beta maps
+    resampled_mask = resample_roi_to_betas(mask_path, lss_betas_path)
+    
+    scores = run_decoding(
+        beta_maps_img=beta_maps_img,
+        mask_img=resampled_mask,
+        labels=labels,
+        valid_trials_mask=valid_trials,
+        groups=groups,
+        is_categorical=is_categorical,
+        cv_params=analysis_params['cv']
     )
-    decoder.fit(X_img, y, groups=groups)
     
     # --- 5. Save Results ---
     output_dir = derivatives_dir / "mvpa" / subject_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{subject_id}_target-{target}_decoding-scores.csv"
+    save_results(subject_id, target, scores, output_dir, roi_name='whole_brain')
     
-    scores = decoder.cv_scores_[list(decoder.cv_scores_.keys())[0]] if is_categorical else decoder.cv_scores_
-    scores_df = pd.DataFrame({'score': scores, 'fold': np.arange(1, len(scores) + 1)})
-    scores_df.to_csv(output_path, index=False)
-    logging.info(f"Decoding scores saved to {output_path}. Mean score: {np.mean(scores):.3f}")
-
 def main():
     """Main function to run the decoding analysis."""
     parser = argparse.ArgumentParser(description="Run MVPA decoding analysis for a single subject.")
@@ -239,13 +238,22 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
-    
-    run_subject_level_decoding(
-        subject_id=args.subject_id,
-        derivatives_dir=Path(args.derivatives_dir),
-        target=args.target,
-        params=config['analysis_params']
-    )
+    env_config = config[args.env]
+    derivatives_dir = Path(env_config['derivatives_dir'])
 
+    # Get the list of decoding targets from the config file
+    decoding_targets = config.get('analysis_params', {}).get('mvpa', {}).get('targets', [])
+    if not decoding_targets:
+        logging.error("No decoding targets specified in the config file under analysis_params.mvpa.targets")
+        return
+
+    for target in decoding_targets:
+        run_subject_level_decoding(
+            subject_id=args.subject_id,
+            derivatives_dir=derivatives_dir,
+            target=target,
+            params=config['analysis_params']
+        )
+    
 if __name__ == "__main__":
     main()
