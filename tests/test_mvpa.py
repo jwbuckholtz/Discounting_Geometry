@@ -67,16 +67,20 @@ def synthetic_dataset(tmp_path_factory):
     # --- Create a corresponding events file ---
     events_df = pd.DataFrame({
         'trial_type': conditions,
-        'trial_index': np.arange(1, n_trials + 1)
+        'SVchosen': np.random.randn(n_trials), # Add a continuous variable
+        'run': np.repeat([1, 2], n_trials // 2)
     })
-    events_path = func_dir / f"sub-{sub_id}_task-discounting_events.tsv"
+    
+    # Save a fake behavioral file in the derivatives dir, which is what the script expects
+    beh_dir = tmp_path / "derivatives" / "behavioral" / f"sub-{sub_id}"
+    beh_dir.mkdir(parents=True, exist_ok=True)
+    events_path = beh_dir / f"sub-{sub_id}_task-discounting_with_sv.tsv"
     events_df.to_csv(events_path, sep='\t', index=False)
     
     return {
-        "bids_dir": tmp_path,
         "derivatives_dir": tmp_path / "derivatives",
+        "fmriprep_dir": tmp_path / "derivatives" / "fmriprep",
         "subject_id": sub_id,
-        "mask_path": mask_path,
         "n_trials": n_trials
     }
 
@@ -86,27 +90,40 @@ def test_run_subject_level_decoding_integration(synthetic_dataset):
     It runs the decoding on the synthetic dataset and checks if the output
     is created and has the correct shape.
     """
-    output_dir = synthetic_dataset["derivatives_dir"] / "mvpa"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = synthetic_dataset["derivatives_dir"] / "mvpa" / f"sub-{synthetic_dataset['subject_id']}"
+    
+    # Create mock analysis parameters, similar to project_config.yaml
+    mock_params = {
+        'mvpa': {
+            'targets': ['trial_type'], # The categorical variable to decode
+            'classification': {
+                'cv': {
+                    'n_splits': 2, # Use 2 splits since we have 2 runs
+                    'random_state': 42
+                },
+                'scoring': 'accuracy'
+            },
+            'regression': {} # Not used in this test
+        }
+    }
     
     # Run the decoding analysis
     run_subject_level_decoding(
-        subject_id=synthetic_dataset["subject_id"],
-        bids_dir=synthetic_dataset["bids_dir"],
+        subject_id=f"sub-{synthetic_dataset['subject_id']}",
         derivatives_dir=synthetic_dataset["derivatives_dir"],
-        mask_path=str(synthetic_dataset["mask_path"]),
-        space="MNI152NLin2009cAsym"
+        target='trial_type',
+        params=mock_params
     )
     
     # Assert that the output file was created
-    expected_output_path = output_dir / f"sub-{synthetic_dataset['subject_id']}_decoding-scores.csv"
+    expected_output_path = output_dir / f"sub-{synthetic_dataset['subject_id']}_target-trial_type_roi-whole_brain_decoding-scores.tsv"
     assert expected_output_path.exists()
     
     # Assert that the output file has the correct contents
-    scores_df = pd.read_csv(expected_output_path)
-    assert 'score' in scores_df.columns
+    scores_df = pd.read_csv(expected_output_path, sep='\t')
+    assert 'scores' in scores_df.columns
     assert 'fold' in scores_df.columns
-    assert len(scores_df) == 5 # Default is 5-fold CV
+    assert len(scores_df) == 2 # n_splits = 2
     
     # Since there's a clear pattern, the mean score should be well above chance (0.5)
-    assert scores_df['score'].mean() > 0.8 
+    assert scores_df['scores'].mean() > 0.8 
