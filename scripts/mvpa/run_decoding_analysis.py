@@ -142,18 +142,26 @@ def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labe
 
     # --- 2. Set up the Model and Cross-Validation ---
     if is_categorical:
-        logging.info("Running classification analysis with StratifiedGroupKFold...")
         model = make_pipeline(StandardScaler(), SVC(kernel='linear', class_weight='balanced'))
-        cv = StratifiedGroupKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
         scoring = 'accuracy'
+        if groups_valid is not None:
+            logging.info("Running classification analysis with StratifiedGroupKFold...")
+            cv = StratifiedGroupKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
+        else:
+            logging.info("Running classification analysis with StratifiedKFold (no groups found)...")
+            cv = StratifiedKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
     else:
-        logging.info("Running regression analysis with GroupKFold...")
         model = make_pipeline(StandardScaler(), SVR(kernel='linear'))
-        cv = GroupKFold(n_splits=cv_params['n_splits'])
         scoring = 'r2'
+        if groups_valid is not None:
+            logging.info("Running regression analysis with GroupKFold...")
+            cv = GroupKFold(n_splits=cv_params['n_splits'])
+        else:
+            logging.info("Running regression analysis with KFold (no groups found)...")
+            cv = KFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
         
     # --- 3. Run Cross-Validation ---
-    # Pass the groups to the cv iterator
+    # Pass the groups to the cv iterator only if they exist
     scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, groups=groups_valid)
     
     return scores
@@ -162,17 +170,14 @@ def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labe
 def save_results(subject_id: str, target_variable: str, scores: np.ndarray, output_dir: Path, roi_name: str) -> None:
     """
     Saves the decoding results to a file.
-
-    Args:
-        subject_id (str): The subject ID.
-        target_variable (str): The decoded target variable.
-        scores (np.array): The cross-validation scores.
-        output_dir (str): The directory to save the results in.
-        roi_name (str): The name of the ROI used.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    results_df = pd.DataFrame({'scores': scores})
-    results_df['fold'] = range(1, len(scores) + 1)
+    results_df = pd.DataFrame({
+        'score': scores,
+        'fold': range(1, len(scores) + 1),
+        'subject_id': subject_id,
+        'roi': roi_name
+    })
     
     output_filename = f'{subject_id}_target-{target_variable}_roi-{roi_name}_decoding-scores.tsv'
     output_path = output_dir / output_filename
@@ -233,8 +238,7 @@ def main():
     """Main function to run the decoding analysis."""
     parser = argparse.ArgumentParser(description="Run MVPA decoding analysis for a single subject.")
     parser.add_argument("subject_id", help="Subject ID (e.g., 'sub-01').")
-    parser.add_argument("derivatives_dir", help="Path to the derivatives directory.")
-    parser.add_argument("--target", required=True, help="The target variable to decode from the events file.")
+    parser.add_argument("--target", help="Optional: The target variable to decode. If not provided, all targets in the config file will be run.")
     parser.add_argument("--config", default='config/project_config.yaml', help="Path to the project config file.")
     parser.add_argument("--env", default='hpc', choices=['local', 'hpc'], help="Environment from the config file.")
     args = parser.parse_args()
@@ -243,10 +247,18 @@ def main():
     env_config = config[args.env]
     derivatives_dir = Path(env_config['derivatives_dir'])
 
-    # Get the list of decoding targets from the config file
-    decoding_targets = config.get('analysis_params', {}).get('mvpa', {}).get('targets', [])
+    # Determine which targets to run
+    if args.target:
+        # If a specific target is provided, run only that one
+        decoding_targets = [args.target]
+        logging.info(f"Running decoding for specified target: {args.target}")
+    else:
+        # Otherwise, run all targets from the config file
+        decoding_targets = config.get('analysis_params', {}).get('mvpa', {}).get('targets', [])
+        logging.info(f"Running decoding for all targets specified in config: {decoding_targets}")
+
     if not decoding_targets:
-        logging.error("No decoding targets specified in the config file under analysis_params.mvpa.targets")
+        logging.error("No decoding targets specified in the config file or via the --target argument.")
         return
 
     for target in decoding_targets:

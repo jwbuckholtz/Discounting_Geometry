@@ -129,9 +129,6 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     subject_data['events_df']['SVunchosen'] = np.random.rand(len(subject_data['events_df'])) * 10
     subject_data['events_df']['SVsum'] = subject_data['events_df']['SVchosen'] + subject_data['events_df']['SVunchosen']
     subject_data['events_df']['SVdiff'] = subject_data['events_df']['SVchosen'] - subject_data['events_df']['SVunchosen']
-
-    # Add glm contrasts to params for the test to pass
-    params['glm'] = {'contrasts': ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']}
     
     # Run the standard GLM analysis
     run_standard_glm_for_subject(subject_data, params)
