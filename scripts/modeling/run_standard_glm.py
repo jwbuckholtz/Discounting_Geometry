@@ -116,6 +116,10 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             
             design_matrix[mod] = convolved_reg
 
+        # CRITICAL FIX: Add a constant intercept term to the design matrix for this run.
+        # Nilearn does not do this automatically when a design matrix is provided.
+        design_matrix['intercept'] = 1.0
+
         design_matrices.append(design_matrix)
             
     # --- Fit the GLM with all runs ---
