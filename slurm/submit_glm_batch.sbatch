@@ -8,7 +8,7 @@
 #SBATCH --nodes=1                         # 1 node
 #SBATCH --ntasks=1                        # 1 task
 #SBATCH --cpus-per-task=2                 # 2 CPUs
-#SBATCH --array=0-7                       # 8 tasks (for 8 subjects), indexed 0 through 7
+#SBATCH --array=0-$(($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort | wc -l) - 1))
 
 # --- Shell Setup ---
 # Change to the directory where you are submitting the script from
@@ -22,20 +22,18 @@ module load python/3.9.0
 source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 
 # --- Subject List ---
-# List all the subjects you need to process.
-SUBJECT_LIST=(
-    sub-s600
-    sub-s604
-    sub-s605
-    sub-s606
-    sub-s607
-    sub-s646
-    sub-s647
-)
+# Create a list of all subject IDs from the behavioral directory
+ALL_SUBJECTS=($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
+NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
+
+# --- SBATCH Array Directive ---
+# We dynamically set the array size based on the number of subjects found.
+# The last index is NUM_SUBJECTS - 1.
+#SBATCH --array=0-$(($NUM_SUBJECTS - 1))
 
 # --- Job Logic ---
 # Use the SLURM task ID to select the correct subject from the list.
-CURRENT_SUBJECT=${SUBJECT_LIST[$SLURM_ARRAY_TASK_ID]}
+CURRENT_SUBJECT=${ALL_SUBJECTS[$SLURM_ARRAY_TASK_ID]}
 
 echo "--- Starting Standard GLM ---"
 echo "SLURM Job ID: $SLURM_JOB_ID"
