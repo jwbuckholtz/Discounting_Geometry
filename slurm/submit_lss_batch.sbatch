@@ -3,7 +3,7 @@
 #SBATCH --job-name=lss_batch
 #SBATCH --output=logs/lss_batch_%A_%a.out  # Standard output log
 #SBATCH --error=logs/lss_batch_%A_%a.err   # Standard error log
-#SBATCH --time=06:00:00                   # 6 hours (LSS is slow)
+#SBATCH --time=10:00:00                   # 10 hours (LSS is very slow)
 #SBATCH --mem=16G                         # 16 GB of memory
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
