@@ -81,7 +81,7 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
     # n_perm=5000 is a good balance of accuracy and computation time.
     # We set tfce=True to enable Threshold-Free Cluster Enhancement.
     neg_log_pvals, tfce_scores, _ = permuted_ols(
-        tested_vars=design_matrix['intercept'],
+        tested_vars=design_matrix[['intercept']], # Pass as a DataFrame (2D)
         target_vars=first_level_maps,
         confounding_vars=None,
         model_intercept=False,  # Intercept is already in our design matrix

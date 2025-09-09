@@ -5,7 +5,8 @@ import numpy as np
 import nibabel as nib
 from nilearn import image
 
-from scripts.rsa.run_rsa_analysis import run_subject_level_rsa, create_theoretical_rdm
+from scripts.rsa.run_rsa_analysis import main as rsa_main
+import sys
 
 @pytest.fixture(scope="module")
 def synthetic_rsa_dataset(tmp_path_factory):
@@ -66,13 +67,26 @@ def synthetic_rsa_dataset(tmp_path_factory):
     pd.DataFrame().to_csv(confounds_path, sep="\t")
     nib.save(mask_img, mask_path)
     
+    # --- 6. Create a mock project configuration file ---
+    config_path = tmp_dir / "project_config.json"
+    config_data = {
+        "subject_id": sub_id,
+        "derivatives_dir": str(derivatives_dir),
+        "fmriprep_dir": str(fmriprep_dir),
+        "analysis_type": "whole_brain",
+        "env": "local"
+    }
+    with open(config_path, "w") as f:
+        json.dump(config_data, f)
+    
     return {
         "subject_id": "sub-01",
         "derivatives_dir": derivatives_dir,
-        "fmriprep_dir": fmriprep_dir
+        "fmriprep_dir": fmriprep_dir,
+        "config_path": config_path
     }
 
-def test_run_subject_level_rsa_integration(synthetic_rsa_dataset):
+def test_run_subject_level_rsa_integration(synthetic_rsa_dataset, monkeypatch):
     """
     Integration test for the main RSA function.
     Checks that the output file is created and that the RSA result
@@ -82,16 +96,22 @@ def test_run_subject_level_rsa_integration(synthetic_rsa_dataset):
     sub_id = synthetic_rsa_dataset["subject_id"]
     derivatives_dir = synthetic_rsa_dataset["derivatives_dir"]
     
-    # Run the analysis
-    run_subject_level_rsa(
-        subject_id=sub_id,
-        derivatives_dir=derivatives_dir,
-        fmriprep_dir=synthetic_rsa_dataset["fmriprep_dir"]
-    )
+    # Use monkeypatch to simulate command-line arguments
+    test_args = [
+        "run_rsa_analysis.py",
+        "--subject", sub_id,
+        "--env", "local", # Using local paths from our mock config
+        "--config", str(synthetic_rsa_dataset["config_path"]),
+        "--analysis-type", "whole_brain"
+    ]
+    monkeypatch.setattr(sys, 'argv', test_args)
+    
+    # Run the main function from the script
+    rsa_main()
     
     # --- Assertions ---
     # 1. Check if the output file was created
-    output_path = derivatives_dir / 'rsa' / sub_id / 'summary_results' / f'{sub_id}_analysis-whole_brain_test_rsa-results.tsv'
+    output_path = derivatives_dir / 'rsa' / sub_id / 'summary_results' / f'{sub_id}_analysis-whole_brain_rsa-results.tsv'
     assert output_path.exists(), "Output TSV file was not created."
     
     # 2. Check the contents of the output file

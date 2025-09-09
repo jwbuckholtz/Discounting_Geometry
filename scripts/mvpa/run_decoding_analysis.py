@@ -127,7 +127,7 @@ def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labe
         np.array: An array of cross-validation scores.
     """
     # --- 1. Filter Data and Apply Mask ---
-    fmri_data_valid = image.index_img(beta_maps_img, valid_trials_mask)
+    fmri_data_valid = image.index_img(beta_maps_img, np.where(valid_trials_mask)[0])
     labels_valid = labels[valid_trials_mask]
     
     # Only try to group if groups are available
@@ -173,7 +173,7 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     results_df = pd.DataFrame({
-        'score': scores,
+        'scores': scores, # Use 'scores' for consistency
         'fold': range(1, len(scores) + 1),
         'subject_id': subject_id,
         'roi': roi_name
@@ -208,9 +208,16 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
     # --- 3. Determine Analysis Type & Get Parameters ---
     if is_categorical:
         analysis_params = params['mvpa']['classification']
+        # CRITICAL FIX: Construct cv_params dict from config values
+        cv_params = {
+            'n_splits': analysis_params['cv_folds'],
+            'random_state': analysis_params.get('random_state', 42)
+        }
         logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
     else:
         analysis_params = params['mvpa']['regression']
+        # CRITICAL FIX: Construct cv_params dict from config values
+        cv_params = {'n_splits': analysis_params['cv_folds']}
         logging.info(f"Treating '{target}' as a REGRESSION target.")
         
     # --- 4. Run Decoding ---
@@ -227,7 +234,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
         valid_trials_mask=valid_trials,
         groups=groups,
         is_categorical=is_categorical,
-        cv_params=analysis_params['cv']
+        cv_params=cv_params
     )
     
     # --- 5. Save Results ---

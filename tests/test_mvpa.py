@@ -13,6 +13,7 @@ from scripts.mvpa.run_decoding_analysis import run_decoding
 from nilearn.image import new_img_like
 from nilearn.maskers import NiftiMasker
 from scripts.mvpa.run_decoding_analysis import run_subject_level_decoding
+from nilearn import image
 
 @pytest.fixture(scope="module")
 def synthetic_dataset(tmp_path_factory):
@@ -47,22 +48,25 @@ def synthetic_dataset(tmp_path_factory):
     n_trials = 20
     conditions = ['high_value', 'low_value'] * (n_trials // 2)
     
-    # Create a base image
-    base_img_data = np.zeros(mask_shape)
-    base_img = nib.Nifti1Image(base_img_data, mask_affine)
+    # Use the LSS beta directory that the script expects
+    lss_dir = tmp_path / "derivatives" / "lss_betas" / f"sub-{sub_id}"
+    lss_dir.mkdir(parents=True, exist_ok=True)
     
+    beta_maps_list = []
     for i in range(n_trials):
         beta_data = np.random.randn(*mask_shape) * 0.1 # Background noise
         if conditions[i] == 'high_value':
-            # Add a "signal" sphere for high_value trials
-            beta_data[3:6, 3:6, 3:6] += 1.0
+            beta_data[3:6, 3:6, 3:6] += 1.0 # Signal region 1
         else:
-            # Add a different "signal" sphere for low_value trials
-            beta_data[7:9, 7:9, 7:9] += 1.0
+            beta_data[7:9, 7:9, 7:9] += 1.0 # Signal region 2
         
-        beta_img = new_img_like(base_img, beta_data)
-        beta_path = lss_dir / f"sub-{sub_id}_trial-{i+1}_condition-{conditions[i]}.nii.gz"
-        nib.save(beta_img, beta_path)
+        beta_img = nib.Nifti1Image(beta_data, mask_affine)
+        beta_maps_list.append(beta_img)
+    
+    # Save as a single 4D file, as expected by the loader
+    beta_maps_4d = image.concat_imgs(beta_maps_list)
+    beta_map_path = lss_dir / f"sub-{sub_id}_lss_beta_maps.nii.gz"
+    nib.save(beta_maps_4d, beta_map_path)
 
     # --- Create a corresponding events file ---
     events_df = pd.DataFrame({
@@ -121,7 +125,7 @@ def test_run_subject_level_decoding_integration(synthetic_dataset):
     
     # Assert that the output file has the correct contents
     scores_df = pd.read_csv(expected_output_path, sep='\t')
-    assert 'scores' in scores_df.columns
+    assert 'scores' in scores_df.columns # Check for 'scores' (plural)
     assert 'fold' in scores_df.columns
     assert len(scores_df) == 2 # n_splits = 2
     

@@ -50,11 +50,26 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     # We will create a list of event DataFrames, one for each run.
     events_per_run = []
     cleaned_confounds_dfs = []
+    final_bold_imgs = []
 
-    for i, confounds_df in enumerate(confounds_dfs):
+    # Define the full set of potential modulator columns based on the config
+    all_modulator_cols = [m for m in params['glm']['contrasts'] if m != 'decision']
+
+    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
         run_number = i + 1
         logging.info(f"  - Preparing data for run {run_number}/{len(bold_imgs)}")
         
+        # Isolate events for the current run
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+
+        # If a run has no events, we must exclude it completely from the analysis
+        if run_events_df.empty:
+            logging.warning(f"No events found for run {run_number}. Excluding this run from the GLM.")
+            continue
+
+        # This run is valid, so we keep its data
+        final_bold_imgs.append(bold_img)
+
         # Clean confounds for this run
         if confounds_df.isnull().values.any():
             logging.warning(f"NaNs found in confounds for run {run_number}. Filling with 0.")
@@ -62,31 +77,30 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         else:
             cleaned_confounds_dfs.append(confounds_df)
 
-        # Isolate events for the current run
-        run_events_df = events_df[events_df['run'] == run_number].copy()
-
         # Normalize onsets to be relative to the start of the run
-        if not run_events_df.empty:
-            first_onset_in_run = run_events_df['onset'].min()
-            run_events_df['onset'] -= first_onset_in_run
-            logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
-        else:
-            logging.warning(f"No events found for run {run_number}. Skipping.")
-            events_per_run.append(None) # Append None to keep lists aligned
-            continue
+        first_onset_in_run = run_events_df['onset'].min()
+        run_events_df['onset'] -= first_onset_in_run
+        logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
 
         # Add a 'trial_type' column for Nilearn's GLM
-        # All events are of the 'decision' type, and other columns become parametric modulators.
         run_events_df['trial_type'] = 'decision'
         
-        # Select only the necessary columns for Nilearn
-        modulator_names = [col for col in modulator_cols if col in run_events_df.columns]
-        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + modulator_names
+        # Ensure all potential modulator columns exist for this run, filling with 0 if absent
+        for col in all_modulator_cols:
+            if col not in run_events_df.columns:
+                run_events_df[col] = 0
+        
+        # Select and order columns consistently
+        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
         events_per_run.append(run_events_df[nilearn_events_cols])
             
-    # --- Fit the GLM with all runs ---
-    logging.info("Fitting GLM to all runs...")
-    glm.fit(bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
+    # --- Fit the GLM with all valid runs ---
+    if not final_bold_imgs:
+        logging.error(f"No runs with valid event data found for {subject_id}. Aborting GLM.")
+        return
+
+    logging.info(f"Fitting GLM to {len(final_bold_imgs)} valid run(s)...")
+    glm.fit(final_bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
     # Inspect the design matrix to get the order of regressors

@@ -126,7 +126,7 @@ def main() -> None:
     
     # Filter beta maps and behavioral data
     logging.info(f"Found {valid_trials_mask.sum()} valid trials out of {len(valid_trials_mask)} for '{args.color_by}'.")
-    filtered_betas_img = image.index_img(beta_maps_img, valid_trials_mask)
+    filtered_betas_img = image.index_img(beta_maps_img, np.where(valid_trials_mask)[0])
     filtered_behavioral_data = behavioral_data[valid_trials_mask].reset_index(drop=True)
 
     # Run embedding

@@ -386,12 +386,12 @@ def main() -> None:
         
         logging.info(f"  - Found {num_valid_trials} valid trials for this model.")
 
-        # 2. Create the single theoretical RDM for this model
+        # Pass the specific, combined mask to the RDM creation function
         theoretical_rdm = create_theoretical_rdm(events_df, model_name, combined_mask)
         all_theoretical_rdms[model_name] = theoretical_rdm # Store for saving later
         
         # 3. Filter the neural data and group labels using the *specific* mask for this model
-        beta_maps_valid = image.index_img(beta_maps_img, combined_mask)
+        beta_maps_valid = image.index_img(beta_maps_img, np.where(combined_mask)[0])
         groups_valid = groups[combined_mask]
 
         # --- Analysis Execution ---
