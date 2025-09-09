@@ -60,7 +60,13 @@ def test_fit_discount_rate_parameter_recovery():
     })
     
     # 3. Fit the model to the synthetic data
-    fit_results = fit_discount_rate(synthetic_df)
+    # Create mock parameters required by the function's new API
+    mock_params = {
+        'initial_params': [0.1, 1.0],  # k, tau
+        'k_bounds': [1e-6, 1.0],
+        'tau_bounds': [1e-6, 5.0]
+    }
+    fit_results = fit_discount_rate(synthetic_df, mock_params)
     
     # 4. Assert that the recovered parameters are close to the true parameters
     assert 'k' in fit_results
