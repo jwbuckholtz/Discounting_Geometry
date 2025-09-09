@@ -56,7 +56,7 @@ def load_data(subject_id: str, derivatives_dir: Path) -> Tuple[nib.Nifti1Image, 
 
     return beta_maps_img, events_df
 
-def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
     """
     Prepares the data for the decoding analysis by creating the labels (y) and
     identifying the relevant trials. This function is robust to NaNs.
@@ -67,8 +67,7 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
         n_betas (int): The number of beta maps, for validation.
 
     Returns:
-        tuple: A tuple containing the labels (y) as a NumPy array and a boolean
-               mask for the trials to include.
+        tuple: A tuple containing (labels, valid_trials_mask, groups, is_categorical).
     """
     # --- 1. Validation ---
     if target_variable not in events_df.columns:
@@ -81,8 +80,13 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
     labels_series = events_df[target_variable].copy()
     valid_trials_mask = labels_series.notna().values
     
-    # --- 3. Handle Categorical vs. Continuous Targets ---
-    if labels_series.dtype == 'object':
+    # --- 3. Determine if Target is Categorical (before type coercion) ---
+    # This check is more robust than relying on the final numpy dtype.
+    # It checks the original data type or the number of unique values.
+    is_categorical = labels_series.dtype == 'object' or labels_series.nunique() < 3
+
+    # --- 4. Handle Categorical vs. Continuous Targets ---
+    if is_categorical:
         # For categorical data, factorize only the non-NaN values
         valid_labels = labels_series[valid_trials_mask]
         codes, uniques = pd.factorize(valid_labels)
@@ -96,7 +100,7 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
         # For numeric data, just use the values
         final_labels = labels_series.values
 
-    # --- 4. Get Grouping Variable (for CV) ---
+    # --- 5. Get Grouping Variable (for CV) ---
     if 'run' in events_df.columns:
         groups = events_df['run'].values
     else:
@@ -105,7 +109,7 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
         logging.warning("No 'run' column found in events data. Cannot use GroupKFold for cross-validation.")
         groups = None
 
-    return final_labels, valid_trials_mask, groups
+    return final_labels, valid_trials_mask, groups, is_categorical
 
 
 def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labels: np.ndarray, valid_trials_mask: np.ndarray, groups: np.ndarray, is_categorical: bool, cv_params: Dict[str, Any]) -> np.ndarray:
@@ -192,18 +196,16 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
     events_df = pd.read_csv(events_path, sep='\t')
     
     # --- 2. Prepare Data (The robust way) ---
-    labels, valid_trials, groups = prepare_decoding_data(events_df, target, n_betas=beta_maps_img.shape[-1])
+    labels, valid_trials, groups, is_categorical = prepare_decoding_data(
+        events_df, target, n_betas=beta_maps_img.shape[-1]
+    )
     
     # --- 3. Determine Analysis Type & Get Parameters ---
-    is_categorical = np.issubdtype(labels.dtype, np.integer) and len(np.unique(labels[valid_trials])) < 3
-
     if is_categorical:
         analysis_params = params['mvpa']['classification']
-        model = SVC(kernel='linear', class_weight='balanced')
         logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
     else:
         analysis_params = params['mvpa']['regression']
-        model = SVR(kernel='linear')
         logging.info(f"Treating '{target}' as a REGRESSION target.")
         
     # --- 4. Run Decoding ---
