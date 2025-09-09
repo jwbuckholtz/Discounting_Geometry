@@ -54,6 +54,12 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
     # --- 3. Define and Fit the Second-Level Model ---
     # The design matrix for a simple group-level t-test is just an intercept
     design_matrix = pd.DataFrame([1] * len(first_level_maps), columns=['intercept'])
+    design_matrix.index = [Path(f).name for f in first_level_maps] # Add subject map names for clarity
+    
+    # Save the design matrix for inspection
+    dm_output_path = group_level_output_dir / f'group_{contrast}_design_matrix.csv'
+    design_matrix.to_csv(dm_output_path)
+    logging.info(f"Saved design matrix to: {dm_output_path}")
 
     # Initialize and fit the second-level GLM
     second_level_model = SecondLevelModel(smoothing_fwhm=8.0, verbose=1)
