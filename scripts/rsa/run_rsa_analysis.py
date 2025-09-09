@@ -344,90 +344,88 @@ def main() -> None:
     # --- Pre-analysis Step: Identify base valid trials (where a choice was made) ---
     base_valid_trials_mask = events_df['choice'].notna().values
 
-    # 2. Create theoretical RDMs (do this once)
-    # For each variable, we ensure we only use non-NaN trials
-    theoretical_rdms = {}
-    for var in analysis_params['rsa']['models']:
-        # Create a specific mask for the current variable, combined with the base mask
-        if var not in events_df.columns:
-            logging.warning(f"Variable '{var}' from config not in events data. Skipping.")
+    # Get the list of models to run from the config
+    models_to_run = analysis_params['rsa']['models']
+    
+    # Store all RDMs and results in these dicts
+    all_theoretical_rdms = {}
+    all_rsa_results = {}
+
+    # --- Main Analysis Loop: Iterate through each theoretical model ---
+    # This ensures that the neural data is filtered with the exact same mask as the theoretical RDM for each model.
+    for model_name in models_to_run:
+        logging.info(f"\n--- Starting RSA for Theoretical Model: '{model_name}' ---")
+
+        # 1. Create the specific mask for this model's variable
+        if model_name not in events_df.columns:
+            logging.warning(f"Variable '{model_name}' not in events data. Skipping.")
             continue
-        var_mask = events_df[var].notna().values
+        
+        var_mask = events_df[model_name].notna().values
         combined_mask = base_valid_trials_mask & var_mask
         
-        # Pass the specific, combined mask to the RDM creation function
-        theoretical_rdms[var] = create_theoretical_rdm(events_df, var, combined_mask)
-
-    # --- Main Analysis Logic ---
-    if args.analysis_type in ['whole_brain', 'searchlight']:
-        # --- Handle single-mask analyses ---
-        output_dir = derivatives_dir / 'rsa' / args.subject
+        num_valid_trials = np.sum(combined_mask)
+        if num_valid_trials < 20: # A reasonable minimum number of trials
+            logging.warning(f"Fewer than 20 valid trials ({num_valid_trials}) for model '{model_name}'. Skipping.")
+            continue
         
-        # Filter beta maps to only include base valid trials *before* analysis
-        beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
+        logging.info(f"  - Found {num_valid_trials} valid trials for this model.")
 
-        if args.analysis_type == 'searchlight':
-            # --- Run Searchlight RSA ---
-            logging.info("\n--- Running Searchlight RSA ---")
-            searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, theoretical_rdms, analysis_params)
-            save_searchlight_maps(args.subject, searchlight_results, output_dir)
-            logging.info("Searchlight analysis complete.")
-        else: # whole_brain
-            # --- Run Whole-Brain RSA ---
-            logging.info("\n--- Running Whole-Brain RSA ---")
-            neural_rdm = create_neural_rdm(beta_maps_valid, mask_img)
-            
-            # For whole-brain, we will run the cross-validated RSA
-            masker = NiftiMasker(mask_img=mask_img, standardize=False) # standardize in pipeline if needed
-            voxel_data = masker.fit_transform(beta_maps_valid)
-            
-            # CRITICAL FIX: Ensure the groups array is filtered with the same mask as the data
-            groups_valid = groups[base_valid_trials_mask]
-            
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups_valid, analysis_params)
-            save_results(args.subject, rsa_results, output_dir, 'whole_brain')
-            
-    elif args.analysis_type == 'roi':
-        # --- Handle ROI analysis (single file or directory) ---
-        roi_path = Path(args.roi_path)
-        if roi_path.is_file():
-            roi_files = [roi_path]
-        else:
-            roi_files = sorted(list(roi_path.glob('*.nii.gz')) + list(roi_path.glob('*.nii')))
-            logging.info(f"Found {len(roi_files)} ROI masks in directory: {roi_path}")
-            
-        for roi_file in roi_files:
-            roi_name = roi_file.stem.replace('_mask', '')
-            logging.info(f"\n--- Running Cross-validated RSA for ROI: {roi_name} ---")
-            
-            # Load the original ROI mask
-            original_roi_mask = image.load_img(roi_file)
+        # 2. Create the single theoretical RDM for this model
+        theoretical_rdm = create_theoretical_rdm(events_df, model_name, combined_mask)
+        all_theoretical_rdms[model_name] = theoretical_rdm # Store for saving later
+        
+        # 3. Filter the neural data and group labels using the *specific* mask for this model
+        beta_maps_valid = image.index_img(beta_maps_img, combined_mask)
+        groups_valid = groups[combined_mask]
 
-            # Resample the ROI to match the beta maps' space
-            analysis_mask_img = resample_roi_to_betas(original_roi_mask, beta_maps_img)
-            
-            # Extract voxel data from the ROI
-            masker = NiftiMasker(mask_img=analysis_mask_img, standardize=False)
-            beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
-            voxel_data = masker.fit_transform(beta_maps_valid)
-            
-            # CRITICAL FIX: Ensure the groups array is filtered with the same mask as the data
-            groups_valid = groups[base_valid_trials_mask]
-            
-            # Run the cross-validated RSA
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups_valid, analysis_params)
-            
-            # Save the cross-validated results
+        # --- Analysis Execution ---
+        if args.analysis_type in ['whole_brain', 'searchlight']:
             output_dir = derivatives_dir / 'rsa' / args.subject
-            save_results(args.subject, rsa_results, output_dir, f'roi-{roi_name}')
+            
+            if args.analysis_type == 'searchlight':
+                logging.info("\n--- Running Searchlight RSA ---")
+                searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, {model_name: theoretical_rdm}, analysis_params)
+                save_searchlight_maps(args.subject, searchlight_results, output_dir)
 
-    # --- Save Theoretical RDMs (only once) ---
+            else: # whole_brain
+                logging.info("\n--- Running Whole-Brain RSA ---")
+                masker = NiftiMasker(mask_img=mask_img, standardize=False)
+                voxel_data = masker.fit_transform(beta_maps_valid)
+                rsa_results = run_crossval_rsa(voxel_data, {model_name: theoretical_rdm}, groups_valid, analysis_params)
+                all_rsa_results.update(rsa_results) # Add this model's results to the collection
+
+        elif args.analysis_type == 'roi':
+            roi_path = Path(args.roi_path)
+            roi_files = [roi_path] if roi_path.is_file() else sorted(list(roi_path.glob('*.nii.gz')) + list(roi_path.glob('*.nii')))
+            
+            for roi_file in roi_files:
+                roi_name = roi_file.stem.replace('_mask', '')
+                logging.info(f"\n--- Running RSA for ROI: {roi_name} ---")
+                
+                analysis_mask_img = resample_roi_to_betas(image.load_img(roi_file), beta_maps_img)
+                masker = NiftiMasker(mask_img=analysis_mask_img, standardize=False)
+                voxel_data = masker.fit_transform(beta_maps_valid)
+                
+                rsa_results = run_crossval_rsa(voxel_data, {model_name: theoretical_rdm}, groups_valid, analysis_params)
+                
+                # We need to save per-ROI results, so we can't just update the main dict.
+                # Let's save them inside the loop.
+                output_dir = derivatives_dir / 'rsa' / args.subject
+                save_results(args.subject, rsa_results, output_dir, f'roi-{roi_name}')
+
+    # --- Save Aggregated Results and RDMs ---
     output_dir = derivatives_dir / 'rsa' / args.subject
-    for name, rdm in theoretical_rdms.items():
+    
+    # Save the whole-brain results if they exist
+    if args.analysis_type == 'whole_brain' and all_rsa_results:
+        save_results(args.subject, all_rsa_results, output_dir, 'whole_brain')
+
+    for name, rdm in all_theoretical_rdms.items():
         if rdm is not None:
             save_rdm(args.subject, rdm, name, output_dir)
 
-    logging.info(f"\nSuccessfully finished RSA for {args.subject}")
+    logging.info(f"\nSuccessfully finished all RSA analyses for {args.subject}")
 
 if __name__ == '__main__':
     main()
