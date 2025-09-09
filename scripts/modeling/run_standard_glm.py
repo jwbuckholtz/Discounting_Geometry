@@ -89,23 +89,29 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     glm.fit(bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    # Inspect the design matrix from the last run to get regressor names
-    final_design_matrix = glm.design_matrices_[-1]
+    # Inspect the design matrix to get the order of regressors
+    final_design_matrix_columns = glm.design_matrices_[-1].columns.tolist()
     
     # Create a dict for all possible contrasts based on the config
     contrasts = {}
     for contrast_id in params['glm']['contrasts']:
-        if contrast_id == 'decision':
-            # The unmodulated event regressor
-            contrasts[contrast_id] = final_design_matrix['decision']
-        elif contrast_id in final_design_matrix.columns:
-            # Simple parametric modulators
-            contrasts[contrast_id] = final_design_matrix[contrast_id]
+        # Create a contrast vector: an array of zeros with a 1 at the position of the desired regressor
+        contrast_vector = np.zeros(len(final_design_matrix_columns))
+        
+        # Find the column index for the current contrast
+        try:
+            # The unmodulated event regressor is named after the trial_type
+            regressor_name = 'decision' if contrast_id == 'decision' else contrast_id
+            regressor_index = final_design_matrix_columns.index(regressor_name)
+            contrast_vector[regressor_index] = 1
+            contrasts[contrast_id] = contrast_vector
+        except ValueError:
+            logging.warning(f"Could not find regressor '{contrast_id}' in the design matrix. Skipping contrast.")
 
-    for contrast_id, contrast_formula in contrasts.items():
+    for contrast_id, contrast_vector in contrasts.items():
         try:
             logging.info(f"  - Computing contrast for '{contrast_id}'")
-            z_map = glm.compute_contrast(contrast_formula, output_type='z_score')
+            z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
             output_filename = output_dir / 'z_maps' / f"{contrast_id}_zmap.nii.gz"
             output_filename.parent.mkdir(parents=True, exist_ok=True)
             z_map.to_filename(output_filename)
@@ -116,8 +122,8 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             else:
                 logging.error(f"  [FAILURE] File check failed for {output_filename.name}")
 
-        except ValueError:
-            logging.warning(f"Contrast '{contrast_id}' could not be computed. It might be all zeros. Skipping.")
+        except Exception as e:
+            logging.error(f"Contrast '{contrast_id}' could not be computed. Error: {e}. Skipping.")
 
 
 def main() -> None:
