@@ -9,32 +9,10 @@ from typing import Dict, Any
 import logging
 from nilearn import image
 
-def convolve_with_hrf(events_df: pd.DataFrame, modulator: str, n_scans: int, t_r: float) -> np.ndarray:
-    """Manually convolves a modulator with a canonical HRF."""
-    frame_times = np.arange(n_scans) * t_r
-    
-    # Create the regressor time series
-    regressor = np.zeros(n_scans)
-    for _, trial in events_df.iterrows():
-        onset_scan = int(trial['onset'] / t_r)
-        # Safety check to prevent IndexError for events outside the scan time
-        if onset_scan < n_scans:
-            regressor[onset_scan] = trial[modulator]
-        else:
-            logging.warning(
-                f"Trial with onset {trial['onset']} is outside the scan time "
-                f"({n_scans * t_r}s). Skipping event for modulator '{modulator}'."
-            )
-        
-    # Canonical HRF
-    hrf = gamma.pdf(np.arange(0, 32, t_r), a=6, scale=1, loc=0)
-    
-    # Convolve and return
-    return np.convolve(regressor, hrf)[:n_scans]
-
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
-    Runs a standard GLM with parametric modulators across one or more runs.
+    Runs a standard GLM with parametric modulators across one or more runs,
+    leveraging Nilearn's automatic design matrix creation.
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
@@ -48,14 +26,11 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Pre-computation Data Cleaning ---
-    # Fill any NaNs in the behavioral modulator columns with 0.
-    # This handles cases where behavioral model fitting may have failed.
-    modulator_cols = [m for m in params['glm']['contrasts'] if m in events_df.columns]
+    modulator_cols = [m for m in params['glm']['contrasts'] if m in events_df.columns and m != 'decision']
     if events_df[modulator_cols].isnull().values.any():
         logging.warning(f"NaNs found in modulator columns for {subject_id}. Filling with 0.")
         events_df[modulator_cols] = events_df[modulator_cols].fillna(0)
 
-    # Convert categorical 'choice' column to numeric (0 or 1) for modulation
     if 'choice' in events_df.columns:
         events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
 
@@ -67,84 +42,79 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         drift_model=params['glm']['drift_model'],
         mask_img=mask_file,
         signal_scaling=False,
-        smoothing_fwhm=params['smoothing_fwhm']
+        smoothing_fwhm=params['smoothing_fwhm'],
+        minimize_memory=False # Keep design matrices for inspection
     )
 
-    # --- Process Each Run Independently ---
-    design_matrices = []
-    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
-        run_number = i + 1
-        logging.info(f"  - Processing run {run_number}/{len(bold_imgs)}")
+    # --- Prepare Events for Each Run ---
+    # We will create a list of event DataFrames, one for each run.
+    events_per_run = []
+    cleaned_confounds_dfs = []
 
-        # Determine the number of scans for this specific run
-        n_scans = image.load_img(bold_img).shape[3]
+    for i, confounds_df in enumerate(confounds_dfs):
+        run_number = i + 1
+        logging.info(f"  - Preparing data for run {run_number}/{len(bold_imgs)}")
         
+        # Clean confounds for this run
+        if confounds_df.isnull().values.any():
+            logging.warning(f"NaNs found in confounds for run {run_number}. Filling with 0.")
+            cleaned_confounds_dfs.append(confounds_df.fillna(0))
+        else:
+            cleaned_confounds_dfs.append(confounds_df)
+
         # Isolate events for the current run
         run_events_df = events_df[events_df['run'] == run_number].copy()
 
-        # --- CRITICAL FIX: Normalize onsets to be relative to the start of the run ---
-        # The onset times in the behavioral files are likely cumulative across the session.
-        # We must subtract the time of the first trial of this run from all onsets in this run.
+        # Normalize onsets to be relative to the start of the run
         if not run_events_df.empty:
             first_onset_in_run = run_events_df['onset'].min()
             run_events_df['onset'] -= first_onset_in_run
             logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
         else:
             logging.warning(f"No events found for run {run_number}. Skipping.")
+            events_per_run.append(None) # Append None to keep lists aligned
             continue
 
-        # Use the modulators from the config file
-        modulators = params['glm']['contrasts']
+        # Add a 'trial_type' column for Nilearn's GLM
+        # All events are of the 'decision' type, and other columns become parametric modulators.
+        run_events_df['trial_type'] = 'decision'
         
-        # Create the design matrix for this run
-        design_matrix = confounds_df.copy()
-        if design_matrix.isnull().values.any():
-            logging.warning(f"NaNs found in confounds for run {run_number}. Filling with 0.")
-            design_matrix = design_matrix.fillna(0)
-        
-        for mod in modulators:
-            if mod == 'decision':
-                # Create a temporary 'decision' column for convolution for this run's events
-                run_events_df_copy = run_events_df.copy()
-                run_events_df_copy['decision'] = 1
-                convolved_reg = convolve_with_hrf(run_events_df_copy, 'decision', n_scans, params['t_r'])
-            elif mod in run_events_df.columns:
-                convolved_reg = convolve_with_hrf(run_events_df, mod, n_scans, params['t_r'])
-            else:
-                logging.warning(f"Modulator column '{mod}' not found in events_df for run {run_number}. Skipping.")
-                continue
-            
-            design_matrix[mod] = convolved_reg
-
-        # CRITICAL FIX: Add a constant intercept term to the design matrix for this run.
-        # Nilearn does not do this automatically when a design matrix is provided.
-        design_matrix['intercept'] = 1.0
-
-        design_matrices.append(design_matrix)
+        # Select only the necessary columns for Nilearn
+        modulator_names = [col for col in modulator_cols if col in run_events_df.columns]
+        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + modulator_names
+        events_per_run.append(run_events_df[nilearn_events_cols])
             
     # --- Fit the GLM with all runs ---
-    glm.fit(bold_imgs, design_matrices=design_matrices)
+    logging.info("Fitting GLM to all runs...")
+    glm.fit(bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    # The design matrix from the last run is used to check for columns, as they are consistent.
-    final_design_matrix = design_matrices[-1]
-    contrasts = {c: c for c in params['glm']['contrasts'] if c in final_design_matrix.columns}
+    # Inspect the design matrix from the last run to get regressor names
+    final_design_matrix = glm.design_matrices_[-1]
+    
+    # Create a dict for all possible contrasts based on the config
+    contrasts = {}
+    for contrast_id in params['glm']['contrasts']:
+        if contrast_id == 'decision':
+            # The unmodulated event regressor
+            contrasts[contrast_id] = final_design_matrix['decision']
+        elif contrast_id in final_design_matrix.columns:
+            # Simple parametric modulators
+            contrasts[contrast_id] = final_design_matrix[contrast_id]
 
     for contrast_id, contrast_formula in contrasts.items():
         try:
-            # Nilearn automatically computes contrasts across all runs
+            logging.info(f"  - Computing contrast for '{contrast_id}'")
             z_map = glm.compute_contrast(contrast_formula, output_type='z_score')
             output_filename = output_dir / 'z_maps' / f"{contrast_id}_zmap.nii.gz"
             output_filename.parent.mkdir(parents=True, exist_ok=True)
             z_map.to_filename(output_filename)
             logging.info(f"Saved z-map to: {output_filename.resolve()}")
 
-            # --- Filesystem Sanity Check ---
-            # Verify that the file exists on the filesystem *from the compute node*
             if output_filename.exists():
                 logging.info(f"  [SUCCESS] File check passed for {output_filename.name}")
             else:
-                logging.error(f"  [FAILURE] File check failed. File not found at {output_filename.resolve()} after saving.")
+                logging.error(f"  [FAILURE] File check failed for {output_filename.name}")
 
         except ValueError:
             logging.warning(f"Contrast '{contrast_id}' could not be computed. It might be all zeros. Skipping.")
