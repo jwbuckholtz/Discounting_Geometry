@@ -32,8 +32,11 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
             logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
             corrected_events_list.append(run_events_df)
     
-    # Overwrite the original events_df with the corrected one
-    events_df = pd.concat(corrected_events_list)
+    if not corrected_events_list:
+        logging.error(f"No valid event data found for any run for subject {subject_id}. Aborting.")
+        return
+
+    events_df = pd.concat(corrected_events_list, ignore_index=True)
 
     # --- Pre-computation Data Cleaning ---
     # Fill any NaNs from the confounds files to prevent crashes.
