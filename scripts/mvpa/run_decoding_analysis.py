@@ -167,7 +167,11 @@ def run_decoding(
         np.array: An array of cross-validation scores.
     """
     # --- 1. Filter Data and Apply Mask ---
-    fmri_data_valid = image.index_img(beta_maps_img, np.where(valid_trials_mask)[0])
+    masker = NiftiMasker(mask_img=mask_img, standardize=False)
+    # This creates the (n_trials, n_voxels) data matrix
+    X = masker.fit_transform(beta_maps_img) 
+    
+    X_valid = X[valid_trials_mask]
     labels_valid = labels[valid_trials_mask]
     
     # Only try to group if groups are available
@@ -176,10 +180,7 @@ def run_decoding(
     # Use NiftiMasker to extract the time series from the ROIs
     # standardize=False is crucial to prevent data leakage across CV folds.
     # Standardization is correctly handled within the scikit-learn pipeline.
-    masker = NiftiMasker(mask_img=mask_img, standardize=False)
-    X = masker.fit_transform(fmri_data_valid)
-    y = labels_valid
-
+    
     # --- 2. Set up the Cross-Validation ---
     if groups_valid is not None:
         n_groups = len(np.unique(groups_valid))
@@ -217,12 +218,12 @@ def run_decoding(
     
     scores = cross_val_score(
         model,
-        X=fmri_data_valid,
+        X=X_valid, # CRITICAL FIX: Use the masked data matrix, not the NIfTI image
         y=labels_valid,
         cv=cv,
         groups=groups_valid,
         scoring=scoring,
-        n_jobs=-1 # Use all available cores
+        n_jobs=-1 
     )
     
     return scores
@@ -267,15 +268,23 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
     )
     
     # --- 3. Determine Analysis Type & Get Parameters ---
-    if is_categorical:
+    # Find which analysis type this target belongs to
+    if target in params['mvpa']['classification']['target_variables']:
         analysis_params = params['mvpa']['classification']
+        is_categorical = True
+    elif target in params['mvpa']['regression']['target_variables']:
+        analysis_params = params['mvpa']['regression']
+        is_categorical = False
+    else:
+        raise ValueError(f"Target '{target}' not defined in classification or regression config.")
+
+    if is_categorical:
         cv_params = {
             'n_splits': analysis_params['cv_folds'],
             'random_state': analysis_params.get('random_state', 42)
         }
         logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
     else:
-        analysis_params = params['mvpa']['regression']
         cv_params = {'n_splits': analysis_params['cv_folds']}
         logging.info(f"Treating '{target}' as a REGRESSION target.")
         
@@ -325,8 +334,8 @@ def main():
     if args.target:
         targets_to_run = [args.target]
     else:
-        targets_to_run = analysis_params['mvpa']['classification']['target_variables'] + \
-                         analysis_params['mvpa']['regression']['target_variables']
+        # Use the single 'targets' list from the config
+        targets_to_run = analysis_params['mvpa']['targets']
     
     for target in targets_to_run:
         try:
@@ -335,7 +344,7 @@ def main():
                 derivatives_dir=derivatives_dir,
                 fmriprep_dir=fmriprep_dir,
                 target=target,
-                params=analysis_params # Pass the correct sub-dict
+                params=analysis_params 
             )
         except Exception as e:
             logging.error(f"Failed to run decoding for target '{target}'. Error: {e}")

@@ -193,15 +193,14 @@ class RSASearchlightEstimator(BaseEstimator):
         Calculate the RSA score (Spearman correlation) for a single sphere.
         'X' is the neural data for the sphere (n_trials x n_voxels).
         """
-        # 1. Create the neural RDM for this sphere
-        # CRITICAL FIX: The distance should be computed between trials (rows), not voxels (columns)
         try:
+            # The distance should be computed between trials (rows), not voxels (columns)
             neural_rdm_flat = pdist(X, metric='correlation')
         except ValueError:
             # Handle spheres with zero variance
             return 0.0
 
-        # 2. Correlate with the single theoretical RDM
+        # Correlate the neural RDM vector with the theoretical RDM vector
         correlation, _ = spearmanr(neural_rdm_flat, self.theoretical_rdm_)
         
         return correlation if not np.isnan(correlation) else 0.0
@@ -212,7 +211,14 @@ class RSASearchlightEstimator(BaseEstimator):
 def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndarray, groups: np.ndarray, mask_img: nib.Nifti1Image, params: Dict[str, Any]) -> nib.Nifti1Image:
     """Runs a searchlight RSA analysis."""
     
-    cv = GroupKFold(n_splits=params['cv_folds'])
+    # Safeguard against asking for more splits than there are groups
+    n_groups = len(np.unique(groups))
+    n_splits = params['cv_folds']
+    if n_splits > n_groups:
+        logging.warning(f"Requested {n_splits} CV splits, but only {n_groups} groups are available. Setting n_splits to {n_groups}.")
+        n_splits = n_groups
+    
+    cv = GroupKFold(n_splits=n_splits)
     
     estimator = RSASearchlightEstimator()
     
@@ -225,13 +231,15 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
         verbose=1
     )
     
+    # The theoretical RDM must be vectorized to match the neural RDM from pdist
+    vectorized_rdm = squareform(theoretical_rdm, checks=False)
+    
     # We pass a dummy 'y' variable for scikit-learn compatibility.
-    # The actual theoretical RDM is passed as a fit_param to the estimator.
+    # The actual vectorized theoretical RDM is passed as a fit_param to the estimator.
     n_trials = beta_maps_img.shape[-1]
     dummy_y = np.arange(n_trials)
     
-    # Nilearn's Searchlight passes extra parameters to the estimator's fit method
-    searchlight.fit(beta_maps_img, dummy_y, groups=groups, theoretical_rdm=theoretical_rdm)
+    searchlight.fit(beta_maps_img, dummy_y, groups=groups, theoretical_rdm=vectorized_rdm)
     
     scores_1d = searchlight.scores_
     

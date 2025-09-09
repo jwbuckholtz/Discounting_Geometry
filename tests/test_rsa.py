@@ -76,9 +76,12 @@ def synthetic_rsa_dataset(tmp_path_factory):
             'derivatives_dir': str(derivatives_dir),
             'fmriprep_dir': str(fmriprep_dir)
         },
-        'rsa': {
-            'theoretical_models': ['choice', 'SVchosen'],
-            'cv_folds': 4
+        'analysis_params': {
+            'rsa': {
+                'theoretical_models': ['choice', 'SVchosen'],
+                'cv_folds': 4,
+                'searchlight_radius': 5
+            }
         }
     }
     with open(config_path, "w") as f:

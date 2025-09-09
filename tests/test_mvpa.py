@@ -82,19 +82,22 @@ def synthetic_dataset(tmp_path_factory):
     
     # --- Create mock analysis parameters ---
     params = {
-        'mvpa': {
-            'classification': {
-                'target_variables': ['trial_type'],
-                'estimator': 'SVC', # Use uppercase to match code
-                'scoring': 'accuracy',
-                'cv_folds': 2,
-                'random_state': 42
-            },
-            'regression': {
-                'target_variables': ['SVDiff'],
-                'estimator': 'SVR', # Use uppercase to match code
-                'scoring': 'r2',
-                'cv_folds': 2
+        'analysis_params': {
+            'mvpa': {
+                'targets': ['trial_type', 'SVchosen'],
+                'classification': {
+                    'target_variables': ['trial_type'],
+                    'estimator': 'SVC',
+                    'scoring': 'accuracy',
+                    'cv_folds': 2,
+                    'random_state': 42
+                },
+                'regression': {
+                    'target_variables': ['SVchosen'],
+                    'estimator': 'SVR',
+                    'scoring': 'r2',
+                    'cv_folds': 2
+                }
             }
         }
     }
@@ -124,7 +127,7 @@ def test_run_subject_level_decoding_integration(synthetic_dataset):
         derivatives_dir=synthetic_dataset["derivatives_dir"],
         fmriprep_dir=synthetic_dataset["fmriprep_dir"],
         target='trial_type',
-        params=params
+        params=params['analysis_params'] # Pass the correct sub-dictionary
     )
     
     # --- Assertions ---

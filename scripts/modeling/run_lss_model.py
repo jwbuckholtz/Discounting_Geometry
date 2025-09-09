@@ -60,12 +60,17 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         signal_scaling=False,
     )
 
-    # --- Prepare list of per-run event dataframes (for nuisance regressors) ---
-    events_per_run = []
-    for run_number in sorted(events_df['run'].unique()):
-        run_events_df = events_df[events_df['run'] == run_number].copy()
-        run_events_df['trial_type'] = 'nuisance' # Initially, all trials are nuisance
-        events_per_run.append(run_events_df)
+    # --- Prepare a dictionary of per-run event dataframes (for nuisance regressors) ---
+    events_per_run = {
+        run_number: events_df[events_df['run'] == run_number].copy()
+        for run_number in sorted(events_df['run'].unique())
+    }
+    # Set the initial trial_type for all events
+    for df in events_per_run.values():
+        df['trial_type'] = 'nuisance'
+
+    # Convert to a list of dataframes in the correct order for nilearn
+    initial_events_list = [events_per_run[run] for run in sorted(events_per_run.keys())]
     
     # --- Main LSS Loop ---
     all_beta_maps = []
@@ -73,14 +78,16 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         logging.info(f"  - Running LSS for trial {trial_idx + 1}/{len(events_df)}")
 
         # Create a deep copy of the per-run events to modify for this trial
-        lss_events_per_run = [df.copy() for df in events_per_run]
+        lss_events_list = [df.copy() for df in initial_events_list]
         
         # Find which run this trial belongs to
         trial_run = trial['run']
         
+        # Find the index of this run in our sorted list of runs
+        run_idx = sorted(events_per_run.keys()).index(trial_run)
+        
         # In the specific run's event dataframe, find the trial and mark it.
-        # We need to find the trial in the per-run dataframe, not the concatenated one.
-        run_specific_df = lss_events_per_run[trial_run - 1]
+        run_specific_df = lss_events_list[run_idx]
         
         # We use np.isclose for robust floating-point comparison
         onsets_match = np.isclose(run_specific_df['onset'], trial['onset'])
@@ -97,7 +104,7 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
             continue
 
         # --- Fit the GLM for this single trial ---
-        glm.fit(bold_imgs, events=lss_events_per_run, confounds=cleaned_confounds_dfs)
+        glm.fit(bold_imgs, events=lss_events_list, confounds=cleaned_confounds_dfs)
 
         # --- Extract and Store the Beta Map ---
         # The contrast is simply the name of the trial_type for our trial of interest
