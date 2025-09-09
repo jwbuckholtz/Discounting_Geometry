@@ -79,7 +79,12 @@ def synthetic_glm_dataset(tmp_path_factory):
     params = {
         't_r': tr,
         'slice_time_ref': 0.5,
-        'smoothing_fwhm': 5.0
+        'smoothing_fwhm': 5.0,
+        'glm': {
+            'contrasts': ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff'],
+            'hrf_model': 'glover',
+            'drift_model': 'cosine'
+        }
     }
     
     return subject_data, params, n_trials
@@ -124,6 +129,9 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     subject_data['events_df']['SVunchosen'] = np.random.rand(len(subject_data['events_df'])) * 10
     subject_data['events_df']['SVsum'] = subject_data['events_df']['SVchosen'] + subject_data['events_df']['SVunchosen']
     subject_data['events_df']['SVdiff'] = subject_data['events_df']['SVchosen'] - subject_data['events_df']['SVunchosen']
+
+    # Add glm contrasts to params for the test to pass
+    params['glm'] = {'contrasts': ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']}
     
     # Run the standard GLM analysis
     run_standard_glm_for_subject(subject_data, params)
@@ -131,12 +139,12 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     # --- Assertions ---
     sub_id = subject_data['subject_id']
     derivatives_dir = subject_data['derivatives_dir']
-    output_dir = derivatives_dir / 'first_level_glms' / sub_id
+    output_dir = derivatives_dir / 'standard_glm' / sub_id
     
-    expected_contrasts = ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff']
+    expected_contrasts = params['glm']['contrasts']
     
     for contrast in expected_contrasts:
-        output_path = output_dir / f"{sub_id}_contrast-{contrast}_map.nii.gz"
+        output_path = output_dir / 'z_maps' / f"{contrast}_zmap.nii.gz"
         assert output_path.exists(), f"Contrast map for '{contrast}' was not created."
         
         # Check the dimensions of the output file
