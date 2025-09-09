@@ -2,8 +2,10 @@ import argparse
 from pathlib import Path
 import pandas as pd
 from nilearn.glm.second_level import SecondLevelModel, make_second_level_design_matrix
+from nilearn.mass_univariate import permuted_ols
 from nilearn.plotting import plot_stat_map, plot_glass_brain
 import logging
+import numpy as np
 
 from scripts.utils import load_config, setup_logging
 
@@ -65,7 +67,46 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
     z_map.to_filename(output_path)
     logging.info(f"Saved group-level z-map to: {output_path}")
 
-    # --- 5. Generate and Save Diagnostic Plots ---
+    # --- 5. Run Permutation Test with TFCE ---
+    logging.info("Starting non-parametric permutation test with TFCE...")
+    
+    # Nilearn's permutation test works directly on the first-level maps
+    # The design matrix is the same as for the GLM (a simple intercept)
+    # n_perm=5000 is a good balance of accuracy and computation time.
+    # We set tfce=True to enable Threshold-Free Cluster Enhancement.
+    neg_log_pvals, tfce_scores, _ = permuted_ols(
+        tested_vars=design_matrix['intercept'],
+        target_vars=first_level_maps,
+        confounding_vars=None,
+        model_intercept=False,  # Intercept is already in our design matrix
+        n_perm=5000,
+        tfce=True,
+        n_jobs=-1,  # Use all available CPUs
+        verbose=1
+    )
+
+    # The output is -log10(p-values), so we convert it back and save it
+    p_vals_tfce_nii = second_level_model.masker_.inverse_transform(neg_log_pvals)
+    p_vals_tfce_nii.to_filename(group_level_output_dir / f'group_{contrast}_tfce_logpvals.nii.gz')
+    logging.info("Permutation test complete. Saved -log10(p) map.")
+
+    # --- 6. Create and Save Thresholded Map ---
+    # Create a new image containing only voxels with p < 0.05
+    # We work with the -log10(p-values) to avoid floating point issues near p=0.
+    # -log10(0.05) is approx 1.3
+    logp_threshold = -np.log10(0.05)
+    
+    # We can use nilearn's math_img to threshold the image
+    from nilearn.image import math_img
+    
+    thresholded_map = math_img(f"img * (img > {logp_threshold})", img=p_vals_tfce_nii)
+    
+    thresholded_map_path = group_level_output_dir / f'group_{contrast}_tfce_p-0.05.nii.gz'
+    thresholded_map.to_filename(thresholded_map_path)
+    logging.info(f"Saved TFCE-thresholded (p < 0.05) map to: {thresholded_map_path}")
+
+
+    # --- 7. Generate and Save Diagnostic Plots ---
     # Plot the unthresholded statistical map
     plot_stat_map(
         z_map,
@@ -76,13 +117,13 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
         colorbar=True
     )
     
-    # Plot a glass brain view
+    # Plot a glass brain view of the TFCE results
     plot_glass_brain(
-        z_map,
-        title=f"Group Level: {contrast} (Glass Brain)",
-        output_file=group_level_output_dir / f'group_{contrast}_glass_brain.png',
+        thresholded_map,
+        title=f"Group Level: {contrast} (TFCE, p < 0.05)",
+        output_file=group_level_output_dir / f'group_{contrast}_tfce_glass_brain.png',
         colorbar=True,
-        threshold=3.1 # Standard z-score threshold for p < 0.001
+        plot_abs=False # We want to see the actual TFCE scores
     )
     logging.info("Generated and saved diagnostic plots.")
     logging.info(f"Group-level analysis for contrast '{contrast}' complete.")
