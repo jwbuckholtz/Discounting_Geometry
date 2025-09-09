@@ -24,7 +24,6 @@ source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
 # --- Subject List ---
 # List all the subjects you need to process.
 SUBJECT_LIST=(
-    sub-s599
     sub-s600
     sub-s604
     sub-s605
