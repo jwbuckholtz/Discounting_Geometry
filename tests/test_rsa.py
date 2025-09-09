@@ -4,9 +4,11 @@ import pandas as pd
 import numpy as np
 import nibabel as nib
 from nilearn import image
+import json
+import sys
+import yaml
 
 from scripts.rsa.run_rsa_analysis import main as rsa_main
-import sys
 
 @pytest.fixture(scope="module")
 def synthetic_rsa_dataset(tmp_path_factory):
@@ -68,16 +70,19 @@ def synthetic_rsa_dataset(tmp_path_factory):
     nib.save(mask_img, mask_path)
     
     # --- 6. Create a mock project configuration file ---
-    config_path = tmp_dir / "project_config.json"
+    config_path = tmp_dir / "project_config.yaml"
     config_data = {
-        "subject_id": sub_id,
-        "derivatives_dir": str(derivatives_dir),
-        "fmriprep_dir": str(fmriprep_dir),
-        "analysis_type": "whole_brain",
-        "env": "local"
+        'local': {
+            'derivatives_dir': str(derivatives_dir),
+            'fmriprep_dir': str(fmriprep_dir)
+        },
+        'rsa': {
+            'theoretical_models': ['choice', 'SVchosen'],
+            'cv_folds': 4
+        }
     }
     with open(config_path, "w") as f:
-        json.dump(config_data, f)
+        yaml.dump(config_data, f)
     
     return {
         "subject_id": "sub-01",

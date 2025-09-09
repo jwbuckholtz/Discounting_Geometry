@@ -81,11 +81,31 @@ def synthetic_dataset(tmp_path_factory):
     events_path = beh_dir / f"sub-{sub_id}_task-discounting_with_sv.tsv"
     events_df.to_csv(events_path, sep='\t', index=False)
     
+    # --- Create mock analysis parameters ---
+    params = {
+        'mvpa': {
+            'classification': {
+                'target_variables': ['trial_type'],
+                'estimator': 'LinearSVC',
+                'scoring': 'accuracy',
+                'cv_folds': 2, # Use the correct flat key
+                'random_state': 42
+            },
+            'regression': {
+                'target_variables': ['SVDiff'],
+                'estimator': 'LinearSVR',
+                'scoring': 'r2',
+                'cv_folds': 2 # Use the correct flat key
+            }
+        }
+    }
+    
     return {
         "derivatives_dir": tmp_path / "derivatives",
         "fmriprep_dir": tmp_path / "derivatives" / "fmriprep",
         "subject_id": sub_id,
-        "n_trials": n_trials
+        "n_trials": n_trials,
+        "params": params
     }
 
 def test_run_subject_level_decoding_integration(synthetic_dataset):
@@ -97,26 +117,15 @@ def test_run_subject_level_decoding_integration(synthetic_dataset):
     output_dir = synthetic_dataset["derivatives_dir"] / "mvpa" / f"sub-{synthetic_dataset['subject_id']}"
     
     # Create mock analysis parameters, similar to project_config.yaml
-    mock_params = {
-        'mvpa': {
-            'targets': ['trial_type'], # The categorical variable to decode
-            'classification': {
-                'cv': {
-                    'n_splits': 2, # Use 2 splits since we have 2 runs
-                    'random_state': 42
-                },
-                'scoring': 'accuracy'
-            },
-            'regression': {} # Not used in this test
-        }
-    }
+    params = synthetic_dataset["params"]
     
-    # Run the decoding analysis
+    # Run the decoding analysis for the classification target
     run_subject_level_decoding(
         subject_id=f"sub-{synthetic_dataset['subject_id']}",
         derivatives_dir=synthetic_dataset["derivatives_dir"],
+        fmriprep_dir=synthetic_dataset["fmriprep_dir"], # Pass the correct fmriprep_dir
         target='trial_type',
-        params=mock_params
+        params=params
     )
     
     # Assert that the output file was created

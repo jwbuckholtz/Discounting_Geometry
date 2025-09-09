@@ -175,87 +175,66 @@ class RSASearchlightEstimator(BaseEstimator):
     """
     A scikit-learn compatible estimator for running RSA within a searchlight.
     """
-    def __init__(self, theoretical_rdms_vec: Dict[str, np.ndarray]):
-        self.theoretical_rdms_vec = theoretical_rdms_vec
+    def __init__(self):
+        self.theoretical_rdm_ = None # Initialize to None
 
-    def fit(self, X, y=None):
+    def fit(self, X, y, **kwargs):
         """
-        Fit is a no-op for this estimator. The work is done in score.
-        This is a standard pattern for searchlight estimators.
+        Fit the RSA model. In this context, 'y' is the theoretical RDM.
+        We store it for the scoring phase.
         """
+        self.theoretical_rdm_ = y
         return self
 
-    def score(self, X, y=None):
+    def score(self, X, y, **kwargs):
         """
-        Calculate the RSA score for a single searchlight sphere.
+        Calculate the RSA score (Spearman correlation) for a single sphere.
+        'X' is the neural data for the sphere (n_trials x n_voxels).
+        'y' is ignored here because the theoretical RDM was passed during fit.
+        """
+        # 1. Create the neural RDM for this sphere
+        # Using correlation distance, as is common
+        try:
+            neural_rdm_flat = pdist(X.T, metric='correlation')
+        except ValueError:
+            # Handle spheres with zero variance (e.g., outside the brain)
+            return 0.0
 
-        X : array, shape (n_trials, n_voxels_in_sphere)
-            The neural data for the sphere.
-        y : None
-            Unused, but required for scikit-learn compatibility.
-        """
-        # 1. Create the neural RDM for the current sphere
-        neural_rdm_vec = pdist(X, metric='correlation')
+        # 2. Correlate with the single theoretical RDM
+        # We use Spearman's rank correlation
+        correlation, _ = spearmanr(neural_rdm_flat, self.theoretical_rdm_)
         
-        # 2. Correlate with each theoretical RDM
-        scores = []
-        # Sort keys to ensure the output order is always the same
-        for model_name in sorted(self.theoretical_rdms_vec.keys()):
-            # Handle potential NaNs from zero-variance spheres
-            if np.isnan(neural_rdm_vec).any():
-                corr = 0.0 # Assign a neutral score
-            else:
-                corr, _ = spearmanr(neural_rdm_vec, self.theoretical_rdms_vec[model_name])
-            scores.append(corr)
-            
-        return np.array(scores)
+        # Handle potential NaNs if RDMs are constant
+        return correlation if not np.isnan(correlation) else 0.0
 
-def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, theoretical_rdms: Dict[str, np.ndarray], params: Dict[str, Any]) -> Dict[str, nib.Nifti1Image]:
-    """
-    Performs a searchlight RSA using a custom scikit-learn estimator.
-    """
-    # --- 1. Prepare Theoretical RDMs ---
-    # Vectorize the theoretical RDMs for efficient correlation.
-    theoretical_rdms_vec = {
-        name: rdm[np.triu_indices_from(rdm, k=1)]
-        for name, rdm in theoretical_rdms.items() if rdm is not None
-    }
+    def get_params(self, deep=True):
+        return {}
+
+def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndarray, groups: np.ndarray, mask_img: nib.Nifti1Image, cv_folds: int) -> nib.Nifti1Image:
+    """Runs a searchlight RSA analysis."""
     
-    # --- 2. Instantiate and Run the SearchLight ---
-    # The estimator is our custom RSA class.
-    estimator = RSASearchlightEstimator(theoretical_rdms_vec=theoretical_rdms_vec)
+    cv = GroupKFold(n_splits=cv_folds)
+    
+    # The estimator now only takes a single theoretical RDM
+    estimator = RSASearchlightEstimator()
     
     searchlight = SearchLight(
-        mask_img,
+        mask_img=mask_img,
         estimator=estimator,
-        radius=params['rsa']['searchlight_radius'],
+        radius=5, # 5mm radius spheres
+        cv=cv,
         n_jobs=-1,
-        verbose=10
+        verbose=1
     )
     
-    # The 'y' parameter is not used by our custom estimator, so we can pass None.
-    searchlight.fit(beta_maps_img, y=None)
+    # Pass the single theoretical RDM to the estimator via the SearchLight's fit method
+    searchlight.fit(beta_maps_img, theoretical_rdm, groups=groups)
     
-    # --- 3. Create and Return Result Maps ---
-    # The searchlight.scores_ attribute is now populated by the .score() method.
-    # It has shape (n_voxels, n_models).
-    model_names = sorted(theoretical_rdms_vec.keys())
-
-    # To unmask the scores, the masker's inverse_transform method expects an array of
-    # shape (n_samples, n_features), where n_features is the number of voxels.
-    # We transpose the scores matrix to get a shape of (n_models, n_voxels).
-    scores_transposed = searchlight.scores_.T
-
-    # Now, unmask the data. This will create a 4D Nifti image where each volume
-    # corresponds to a single theoretical model's RSA scores.
-    result_maps_4d_img = searchlight.masker_.inverse_transform(scores_transposed)
-
-    # Finally, split the 4D image into a separate 3D map for each model.
-    result_maps = {}
-    for i, model_name in enumerate(model_names):
-        result_maps[model_name] = image.index_img(result_maps_4d_img, i)
-        
-    return result_maps
+    # The scores are now a 1D array of floats
+    scores_1d = searchlight.scores_
+    
+    # Use the masker from the searchlight to convert 1D scores back to a 3D image
+    return searchlight.masker_.inverse_transform(scores_1d)
 
 
 def save_rdm(subject_id: str, rdm: np.ndarray, model_name: str, output_dir: Path) -> None:
@@ -399,12 +378,24 @@ def main() -> None:
             output_dir = derivatives_dir / 'rsa' / args.subject
             
             if args.analysis_type == 'searchlight':
-                logging.info("\n--- Running Searchlight RSA ---")
-                searchlight_results = run_searchlight_rsa(beta_maps_valid, mask_img, {model_name: theoretical_rdm}, analysis_params)
-                save_searchlight_maps(args.subject, searchlight_results, output_dir)
+                logging.info(f"--- Running Searchlight RSA for model: {model_name} ---")
+                searchlight_map = run_searchlight_rsa(
+                    beta_maps_valid, 
+                    theoretical_rdm, 
+                    groups_valid, 
+                    mask_img,
+                    analysis_params['rsa']['cv_folds']
+                )
+                
+                # Save the resulting map
+                output_dir = derivatives_dir / 'rsa' / args.subject / 'searchlight_maps'
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / f'{args.subject}_model-{model_name}_rsa-searchlight-map.nii.gz'
+                nib.save(searchlight_map, output_path)
+                logging.info(f"Saved searchlight map to {output_path}")
 
             else: # whole_brain
-                logging.info("\n--- Running Whole-Brain RSA ---")
+                logging.info(f"--- Running Whole-Brain RSA for model: {model_name} ---")
                 masker = NiftiMasker(mask_img=mask_img, standardize=False)
                 voxel_data = masker.fit_transform(beta_maps_valid)
                 rsa_results = run_crossval_rsa(voxel_data, {model_name: theoretical_rdm}, groups_valid, analysis_params)

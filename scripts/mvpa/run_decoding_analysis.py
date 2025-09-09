@@ -14,6 +14,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from typing import Tuple, Dict, Any, List
 import nibabel as nib
 import logging
@@ -112,7 +114,17 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
     return final_labels, valid_trials_mask, groups, is_categorical
 
 
-def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labels: np.ndarray, valid_trials_mask: np.ndarray, groups: np.ndarray, is_categorical: bool, cv_params: Dict[str, Any]) -> np.ndarray:
+def run_decoding(
+    beta_maps_img: nib.Nifti1Image,
+    mask_img: nib.Nifti1Image,
+    labels: np.ndarray,
+    valid_trials_mask: np.ndarray,
+    groups: np.ndarray,
+    is_categorical: bool,
+    cv_params: Dict[str, Any],
+    estimator: str,
+    scoring: str
+) -> np.ndarray:
     """
     Runs the MVPA/decoding analysis using scikit-learn directly for robustness.
 
@@ -140,29 +152,54 @@ def run_decoding(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, labe
     X = masker.fit_transform(fmri_data_valid)
     y = labels_valid
 
-    # --- 2. Set up the Model and Cross-Validation ---
-    if is_categorical:
-        model = make_pipeline(StandardScaler(), SVC(kernel='linear', class_weight='balanced'))
-        scoring = 'accuracy'
-        if groups_valid is not None:
-            logging.info("Running classification analysis with StratifiedGroupKFold...")
-            cv = StratifiedGroupKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
-        else:
-            logging.info("Running classification analysis with StratifiedKFold (no groups found)...")
-            cv = StratifiedKFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
-    else:
-        model = make_pipeline(StandardScaler(), SVR(kernel='linear'))
-        scoring = 'r2'
-        if groups_valid is not None:
-            logging.info("Running regression analysis with GroupKFold...")
-            cv = GroupKFold(n_splits=cv_params['n_splits'])
-        else:
-            logging.info("Running regression analysis with KFold (no groups found)...")
-            cv = KFold(n_splits=cv_params['n_splits'], shuffle=True, random_state=cv_params['random_state'])
+    # --- 2. Set up the Cross-Validation ---
+    if groups_valid is not None:
+        n_groups = len(np.unique(groups_valid))
+        if cv_params['n_splits'] > n_groups:
+            logging.warning(
+                f"Requested {cv_params['n_splits']} CV splits, but only {n_groups} groups (runs) are available. "
+                f"Setting n_splits to {n_groups}."
+            )
+            cv_params['n_splits'] = n_groups
         
-    # --- 3. Run Cross-Validation ---
-    # Pass the groups to the cv iterator only if they exist
-    scores = cross_val_score(model, X, y, cv=cv, scoring=scoring, groups=groups_valid)
+        if is_categorical:
+            cv = StratifiedGroupKFold(**cv_params)
+        else:
+            cv = GroupKFold(**cv_params)
+    else:
+        if is_categorical:
+            cv = StratifiedKFold(**cv_params)
+        else:
+            cv = KFold(**cv_params)
+
+    # --- 3. Set up the ML model ---
+    # Define available estimators
+    estimators = {
+        'SVC': SVC(kernel='linear', class_weight='balanced'),
+        'SVR': SVR(kernel='linear'),
+        'LogisticRegression': LogisticRegression(penalty='l2', class_weight='balanced'),
+        'Ridge': Ridge(),
+        'RandomForestClassifier': RandomForestClassifier(class_weight='balanced'),
+        'RandomForestRegressor': RandomForestRegressor()
+    }
+    
+    if estimator not in estimators:
+        raise ValueError(f"Unknown estimator '{estimator}'. Available options are: {list(estimators.keys())}")
+    
+    model = make_pipeline(StandardScaler(), estimators[estimator])
+
+    # --- 4. Run Cross-Validation ---
+    logging.info(f"Running {cv_params['n_splits']}-fold cross-validation with '{estimator}' and '{scoring}' scoring...")
+    
+    scores = cross_val_score(
+        model,
+        X=fmri_data_valid,
+        y=labels_valid,
+        cv=cv,
+        groups=groups_valid,
+        scoring=scoring,
+        n_jobs=-1 # Use all available cores
+    )
     
     return scores
 
@@ -187,7 +224,7 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     logging.info(f"Mean score for ROI '{roi_name}': {np.mean(scores):.3f} (+/- {np.std(scores):.3f})")
 
 
-def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: str, params: Dict[str, Any]):
+def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path, target: str, params: Dict[str, Any]):
     """
     Runs the decoding analysis for a single subject and a single target variable.
     """
@@ -208,7 +245,6 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
     # --- 3. Determine Analysis Type & Get Parameters ---
     if is_categorical:
         analysis_params = params['mvpa']['classification']
-        # CRITICAL FIX: Construct cv_params dict from config values
         cv_params = {
             'n_splits': analysis_params['cv_folds'],
             'random_state': analysis_params.get('random_state', 42)
@@ -216,13 +252,12 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
         logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
     else:
         analysis_params = params['mvpa']['regression']
-        # CRITICAL FIX: Construct cv_params dict from config values
         cv_params = {'n_splits': analysis_params['cv_folds']}
         logging.info(f"Treating '{target}' as a REGRESSION target.")
         
     # --- 4. Run Decoding ---
     # We use the whole-brain mask for this simplified script
-    _, mask_path, _ = find_fmriprep_files(derivatives_dir / 'fmriprep', subject_id)
+    _, mask_path, _ = find_fmriprep_files(fmriprep_dir, subject_id)
     
     # Resample the mask to match the beta maps
     resampled_mask = resample_roi_to_betas(mask_path, lss_betas_path)
@@ -234,7 +269,9 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
         valid_trials_mask=valid_trials,
         groups=groups,
         is_categorical=is_categorical,
-        cv_params=cv_params
+        cv_params=cv_params,
+        estimator=analysis_params['estimator'],
+        scoring=analysis_params['scoring']
     )
     
     # --- 5. Save Results ---
@@ -242,7 +279,9 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, target: s
     save_results(subject_id, target, scores, output_dir, roi_name='whole_brain')
     
 def main():
-    """Main function to run the decoding analysis."""
+    """
+    Main function to run the decoding analysis from the command line.
+    """
     parser = argparse.ArgumentParser(description="Run MVPA decoding analysis for a single subject.")
     parser.add_argument("subject_id", help="Subject ID (e.g., 'sub-01').")
     parser.add_argument("--target", help="Optional: The target variable to decode. If not provided, all targets in the config file will be run.")
@@ -251,30 +290,25 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
-    env_config = config[args.env]
-    derivatives_dir = Path(env_config['derivatives_dir'])
-
-    # Determine which targets to run
-    if args.target:
-        # If a specific target is provided, run only that one
-        decoding_targets = [args.target]
-        logging.info(f"Running decoding for specified target: {args.target}")
-    else:
-        # Otherwise, run all targets from the config file
-        decoding_targets = config.get('analysis_params', {}).get('mvpa', {}).get('targets', [])
-        logging.info(f"Running decoding for all targets specified in config: {decoding_targets}")
-
-    if not decoding_targets:
-        logging.error("No decoding targets specified in the config file or via the --target argument.")
-        return
-
-    for target in decoding_targets:
-        run_subject_level_decoding(
-            subject_id=args.subject_id,
-            derivatives_dir=derivatives_dir,
-            target=target,
-            params=config['analysis_params']
-        )
+    paths = config[args.env]
+    derivatives_dir = Path(paths['derivatives_dir'])
+    fmriprep_dir = Path(paths['fmriprep_dir']) # Use the dedicated path
     
-if __name__ == "__main__":
+    # Determine which targets to run
+    targets_to_run = [args.target] if args.target else config['mvpa']['classification']['target_variables'] + config['mvpa']['regression']['target_variables']
+    
+    for target in targets_to_run:
+        try:
+            run_subject_level_decoding(
+                subject_id=args.subject_id,
+                derivatives_dir=derivatives_dir,
+                fmriprep_dir=fmriprep_dir, # Pass it through
+                target=target,
+                params=config
+            )
+        except Exception as e:
+            logging.error(f"Failed to run decoding for target '{target}'. Error: {e}")
+            logging.exception(e)
+
+if __name__ == '__main__':
     main()

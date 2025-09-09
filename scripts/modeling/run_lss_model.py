@@ -6,6 +6,7 @@ from nilearn import image
 from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
 from typing import Dict, Any
 import logging
+import numpy as np
 
 def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
@@ -81,17 +82,18 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         # We need to find the trial in the per-run dataframe, not the concatenated one.
         run_specific_df = lss_events_per_run[trial_run - 1]
         
-        # Find the original index of the trial within its run's dataframe
-        original_trial_loc = run_specific_df[
-            (run_specific_df['onset'] == trial['onset']) &
-            (run_specific_df['duration'] == trial['duration'])
-        ].index
+        # We use np.isclose for robust floating-point comparison
+        onsets_match = np.isclose(run_specific_df['onset'], trial['onset'])
+        durations_match = np.isclose(run_specific_df['duration'], trial['duration'])
+        
+        original_trial_loc = run_specific_df[onsets_match & durations_match].index
         
         if not original_trial_loc.empty:
             # Mark the trial of interest with its correct trial_type
+            # Use .loc to ensure we're modifying the actual DataFrame
             run_specific_df.loc[original_trial_loc, 'trial_type'] = trial['trial_type']
         else:
-            logging.warning(f"Could not find trial {trial_idx} in its run dataframe. Skipping.")
+            logging.warning(f"Could not find trial {trial_idx} in its run dataframe using float comparison. Skipping.")
             continue
 
         # --- Fit the GLM for this single trial ---

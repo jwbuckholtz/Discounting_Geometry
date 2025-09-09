@@ -108,36 +108,42 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # Create a dict for all possible contrasts based on the config
     contrasts = {}
-    for contrast_id in params['glm']['contrasts']:
-        # Create a contrast vector: an array of zeros with a 1 at the position of the desired regressor
-        contrast_vector = np.zeros(len(final_design_matrix_columns))
+    for contrast_name in params['glm']['contrasts']:
+        # The base regressor for all trials is simply 'decision'
+        base_regressor = 'decision'
         
-        # Find the column index for the current contrast
-        try:
-            # The unmodulated event regressor is named after the trial_type
-            regressor_name = 'decision' if contrast_id == 'decision' else contrast_id
-            regressor_index = final_design_matrix_columns.index(regressor_name)
-            contrast_vector[regressor_index] = 1
-            contrasts[contrast_id] = contrast_vector
-        except ValueError:
-            logging.warning(f"Could not find regressor '{contrast_id}' in the design matrix. Skipping contrast.")
-
-    for contrast_id, contrast_vector in contrasts.items():
-        try:
-            logging.info(f"  - Computing contrast for '{contrast_id}'")
-            z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
-            output_filename = output_dir / 'z_maps' / f"{contrast_id}_zmap.nii.gz"
-            output_filename.parent.mkdir(parents=True, exist_ok=True)
-            z_map.to_filename(output_filename)
-            logging.info(f"Saved z-map to: {output_filename.resolve()}")
-
-            if output_filename.exists():
-                logging.info(f"  [SUCCESS] File check passed for {output_filename.name}")
+        # For parametric modulators, Nilearn creates a new column name like 'decisionxSVchosen'
+        if contrast_name != base_regressor:
+            # Find the actual column name in the design matrix
+            # It will be the base regressor name, an 'x', and the contrast name
+            expected_col_name = f"{base_regressor}x{contrast_name}"
+            if expected_col_name in final_design_matrix_columns:
+                contrast_def = final_design_matrix_columns.index(expected_col_name)
             else:
-                logging.error(f"  [FAILURE] File check failed for {output_filename.name}")
+                logging.warning(f"Could not find column for parametric modulator '{contrast_name}' (expected '{expected_col_name}'). Skipping contrast.")
+                continue
+        else:
+            # For the main effect, the column is just the base regressor name
+            contrast_def = final_design_matrix_columns.index(base_regressor)
 
-        except Exception as e:
-            logging.error(f"Contrast '{contrast_id}' could not be computed. Error: {e}. Skipping.")
+        # Create a contrast vector
+        contrast_vector = np.zeros(len(final_design_matrix_columns))
+        contrast_vector[contrast_def] = 1
+        
+        # --- Compute and Save Contrast ---
+        logging.info(f"  - Computing contrast for '{contrast_name}'...")
+        z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
+        
+        # Save the z-map
+        contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
+        contrast_filename.parent.mkdir(parents=True, exist_ok=True)
+        z_map.to_filename(contrast_filename)
+        logging.info(f"Saved z-map to: {contrast_filename.resolve()}")
+
+        if contrast_filename.exists():
+            logging.info(f"  [SUCCESS] File check passed for {contrast_filename.name}")
+        else:
+            logging.error(f"  [FAILURE] File check failed for {contrast_filename.name}")
 
 
 def main() -> None:
