@@ -16,30 +16,38 @@ from typing import Dict, Any, Tuple, List
 import nibabel as nib
 import logging
 
-from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, load_concatenated_subject_data, setup_logging
+from scripts.utils import load_config, find_fmriprep_files, find_lss_beta_maps, find_behavioral_sv_file, setup_logging
 
 def resample_roi_to_betas(roi_img: nib.Nifti1Image, beta_maps_img: nib.Nifti1Image) -> nib.Nifti1Image:
     """Resamples an ROI mask to match the space of the beta maps."""
     logging.info("  - Resampling ROI to match beta map space...")
     return image.resample_to_img(roi_img, beta_maps_img, interpolation='nearest')
 
-def load_data(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path) -> Tuple[nib.Nifti1Image, pd.DataFrame, nib.Nifti1Image]:
+def load_data(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path) -> Tuple[nib.Nifti1Image, pd.DataFrame, nib.Nifti1Image, np.ndarray]:
     """
-    Loads the necessary data for a single subject's RSA.
+    Loads all the necessary data for a single subject's RSA.
     """
     # 1. Find and load the single-trial beta maps
+    logging.info("  - Loading LSS beta maps...")
     betas_path = find_lss_beta_maps(derivatives_dir, subject_id)
     beta_maps_img = image.load_img(betas_path)
 
     # 2. Find and load the processed behavioral data
+    logging.info("  - Loading behavioral events...")
     events_path = find_behavioral_sv_file(derivatives_dir, subject_id)
     events_df = pd.read_csv(events_path, sep='\t')
     
     # 3. Find and load the whole-brain mask
+    logging.info("  - Loading brain mask...")
     _, mask_path, _ = find_fmriprep_files(fmriprep_dir, subject_id)
     mask_img = image.load_img(mask_path)
 
-    return beta_maps_img, events_df, mask_img
+    # 4. Extract groups (run identifiers) for cross-validation
+    if 'run' not in events_df.columns:
+        raise ValueError(f"'run' column not found in events file for {subject_id}")
+    groups = events_df['run'].values
+
+    return beta_maps_img, events_df, mask_img, groups
 
 def create_neural_rdm(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image) -> np.ndarray:
     """
@@ -285,46 +293,6 @@ def save_results(subject_id: str, rsa_results: Dict[str, Any], output_dir: Path,
     
     logging.info(f"Saved RSA results for '{analysis_name}' to {output_path}")
 
-def run_subject_level_rsa(subject_id: str, derivatives_dir: Path, fmriprep_dir: Path):
-    """
-    Runs the whole-brain, cross-validated RSA for a single subject.
-    This function is designed to be importable and testable.
-    """
-    # 1. Load data
-    logging.info(f"Loading data for {subject_id}...")
-    # This assumes LSS betas and concatenated data are available
-    # For a test, we would mock this part
-    beta_maps_img, events_df, mask_img = load_data(subject_id, derivatives_dir, fmriprep_dir)
-    
-    # Fake group labels for testing purposes if not present
-    if 'run' not in events_df.columns:
-        events_df['run'] = np.tile(np.arange(1, 5), len(events_df) // 4 + 1)[:len(events_df)]
-    groups = events_df['run'].values
-    
-    # 2. Create theoretical RDMs
-    base_valid_trials_mask = events_df['choice'].notna().values
-    theoretical_rdms = {}
-    for var in ['choice', 'SVchosen']: # Simplified for testing
-        var_mask = events_df[var].notna().values
-        combined_mask = base_valid_trials_mask & var_mask
-        theoretical_rdms[var] = create_theoretical_rdm(events_df, var, combined_mask)
-
-    # 3. Run Whole-Brain Cross-validated RSA
-    output_dir = derivatives_dir / 'rsa' / subject_id
-    beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
-    
-    masker = NiftiMasker(mask_img=mask_img, standardize=True)
-    voxel_data = masker.fit_transform(beta_maps_valid)
-    
-    # Fake cv_params for testing
-    cv_params = {'n_splits': 4} 
-    
-    rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups[base_valid_trials_mask], cv_params)
-    save_results(subject_id, rsa_results, output_dir, 'whole_brain_test')
-
-    logging.info(f"Finished RSA for {subject_id}")
-
-
 def main() -> None:
     """Main function to run the RSA."""
     parser = argparse.ArgumentParser(description="Run Representational Similarity Analysis (RSA).")
@@ -349,14 +317,13 @@ def main() -> None:
     derivatives_dir = Path(env_config['derivatives_dir'])
     fmriprep_dir = Path(env_config['fmriprep_dir'])
 
-    # 1. Load data (beta maps and events)
+    # 1. Load data (LSS betas, events, and mask)
     logging.info(f"Loading data for {args.subject}...")
-    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
-    beta_maps_img = image.load_img(subject_data['bold_imgs']) # needs to be loaded from path list
-    events_df = subject_data['events_df']
-    mask_img = image.load_img(subject_data['mask_file'])
-    groups = subject_data['groups']
-
+    beta_maps_img, events_df, mask_img, groups = load_data(
+        subject_id=args.subject,
+        derivatives_dir=derivatives_dir,
+        fmriprep_dir=fmriprep_dir
+    )
 
     # --- CRITICAL FIX: Normalize onsets to be relative to the start of each run ---
     # The onset times in the behavioral files are cumulative across the session.
@@ -371,7 +338,7 @@ def main() -> None:
             corrected_events_list.append(run_events_df)
     
     # Overwrite the original events_df with the corrected one
-    events_df = pd.concat(corrected_events_list)
+    events_df = pd.concat(corrected_events_list, ignore_index=True)
     
 
     # --- Pre-analysis Step: Identify base valid trials (where a choice was made) ---
