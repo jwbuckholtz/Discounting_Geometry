@@ -70,54 +70,49 @@ All paths and analysis parameters are managed through a central configuration fi
 
 ## 5. HPC Analysis Workflow
 
-The pipeline is designed to be run as a sequence of discrete stages on a SLURM cluster. This provides clear checkpoints and makes debugging easier.
+The pipeline is designed to be run as a sequence of discrete stages on a SLURM cluster. We use modern SLURM **job arrays** for the subject-level analyses, which is highly efficient for managing large batches of jobs.
 
-**Before you begin**: Grant execute permissions to all submission scripts:
+**Before you begin**: You must first `git pull` on Sherlock to get the latest versions of these scripts. Then, ensure the SLURM scripts are executable:
 ```bash
-chmod +x slurm/*.sh slurm/*.sbatch
+chmod +x slurm/*.sbatch
 ```
 
-### Step 1: Behavioral Analysis
-This step runs the behavioral modeling for all subjects, generating the trial-wise subjective value files required by all fMRI models.
+### Step 1: First-Level Standard GLMs
+This submits a **single job array** that processes a specific list of subjects defined within the script. This script generates the first-level contrast maps needed for the group analysis.
+
 ```bash
-sbatch slurm/submit_behavioral_analysis.sbatch
+sbatch slurm/submit_glm_batch.sbatch
 ```
 
-### Step 2: First-Level Standard GLMs
-This submits a separate job for each subject to run the standard first-level GLM, generating contrast maps for each predictor.
+### Step 2: First-Level LSS Models
+*This can be run in parallel with Step 1.*
+This submits another **job array** to generate single-trial beta-maps using the Least-Squares-Separate (LSS) method. This is a very computationally intensive step and may take several hours per subject. This script will automatically find and process **all** subjects in your `derivatives/behavioral` directory.
+
 ```bash
-./slurm/submit_all_standard_glms.sh
+sbatch slurm/submit_lss_batch.sbatch
 ```
 
 ### Step 3: Group-Level Univariate Models
-*This step should only be run after all jobs from Step 2 have completed successfully.*
-This runs a single job that performs a group-level (second-level) analysis for all contrasts, identifying significant group-average effects.
+*This step should only be run after all jobs from Step 1 have completed successfully.*
+This runs a single job that performs a group-level (second-level) analysis for all contrasts defined in `project_config.yaml`, identifying significant group-average effects across the cohort.
+
 ```bash
 sbatch slurm/submit_group_glms.sbatch
 ```
 
-### Step 4: First-Level LSS Models
-This submits a separate job for each subject to generate single-trial beta-maps using the Least-Squares-Separate (LSS) method. These are required for MVPA and RSA.
-```bash
-./slurm/submit_all_lss_models.sh
-```
+### Step 4 (Optional): Behavioral Data Summary & QA
+We have created a powerful script to summarize behavioral data, run key statistical models (mixed-effects models), and generate diagnostic plots. This is an excellent tool for quality assurance and for understanding your behavioral data in depth.
 
-### Step 5: MVPA and RSA
-*These steps should only be run after all jobs from Step 4 have completed successfully.*
-These scripts submit jobs for each subject to run the multivariate analyses.
-```bash
-# To run MVPA (decoding)
-./slurm/submit_all_decoding.sh
+This script can be run locally (if OAK is mounted) or on an HPC login node, as it is not computationally intensive.
 
-# To run RSA
-./slurm/submit_all_rsa.sh
-```
-
-### Step 6: Visualizations
-This step will generate plots and figures from the results of the previous stages.
 ```bash
-./slurm/submit_all_visualizations.sh
+# To run using local paths from the config file
+python scripts/behavioral/summarize_behavioral_data.py --env local
+
+# To run using HPC (OAK) paths from the config file
+python scripts/behavioral/summarize_behavioral_data.py --env hpc
 ```
+The script will print all statistical model summaries to the terminal and save all output tables and plots to `derivatives/behavioral/summaries/`.
 
 ---
-You can monitor the progress of all submitted jobs using `squeue -u $USER`. Logs for each job are saved to the `logs/` directory.
+You can monitor the progress of all submitted jobs using `squeue -u $USER`. Logs for each job and task array are saved to the `logs/` directory.
