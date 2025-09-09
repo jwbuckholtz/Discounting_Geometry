@@ -237,17 +237,23 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Imag
     searchlight.fit(beta_maps_img, y=None)
     
     # --- 3. Create and Return Result Maps ---
-    # The searchlight.scores_ attribute is now correctly populated by the .score() method.
+    # The searchlight.scores_ attribute is now populated by the .score() method.
+    # It has shape (n_voxels, n_models).
     model_names = sorted(theoretical_rdms_vec.keys())
+
+    # To unmask the scores, the masker's inverse_transform method expects an array of
+    # shape (n_samples, n_features), where n_features is the number of voxels.
+    # We transpose the scores matrix to get a shape of (n_models, n_voxels).
+    scores_transposed = searchlight.scores_.T
+
+    # Now, unmask the data. This will create a 4D Nifti image where each volume
+    # corresponds to a single theoretical model's RSA scores.
+    result_maps_4d_img = searchlight.masker_.inverse_transform(scores_transposed)
+
+    # Finally, split the 4D image into a separate 3D map for each model.
     result_maps = {}
     for i, model_name in enumerate(model_names):
-        # The searchlight.scores_ attribute has shape (n_voxels, n_models). 
-        # We select the column for the current model.
-        score_map = searchlight.scores_[:, i]
-        
-        # Unmask the scores back into a Nifti image
-        result_map_img = image.new_img_like(mask_img, score_map.astype('float32'), affine=mask_img.affine)
-        result_maps[model_name] = result_map_img
+        result_maps[model_name] = image.index_img(result_maps_4d_img, i)
         
     return result_maps
 
