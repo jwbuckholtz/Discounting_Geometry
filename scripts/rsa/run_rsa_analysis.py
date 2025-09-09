@@ -178,9 +178,16 @@ class RSASearchlightEstimator(BaseEstimator):
     def __init__(self, theoretical_rdms_vec: Dict[str, np.ndarray]):
         self.theoretical_rdms_vec = theoretical_rdms_vec
 
-    def fit(self, X: np.ndarray, y=None):
+    def fit(self, X, y=None):
         """
-        Fit the RSA model to the data of a single searchlight sphere.
+        Fit is a no-op for this estimator. The work is done in score.
+        This is a standard pattern for searchlight estimators.
+        """
+        return self
+
+    def score(self, X, y=None):
+        """
+        Calculate the RSA score for a single searchlight sphere.
 
         X : array, shape (n_trials, n_voxels_in_sphere)
             The neural data for the sphere.
@@ -194,12 +201,14 @@ class RSASearchlightEstimator(BaseEstimator):
         scores = []
         # Sort keys to ensure the output order is always the same
         for model_name in sorted(self.theoretical_rdms_vec.keys()):
-            corr, _ = spearmanr(neural_rdm_vec, self.theoretical_rdms_vec[model_name])
+            # Handle potential NaNs from zero-variance spheres
+            if np.isnan(neural_rdm_vec).any():
+                corr = 0.0 # Assign a neutral score
+            else:
+                corr, _ = spearmanr(neural_rdm_vec, self.theoretical_rdms_vec[model_name])
             scores.append(corr)
             
-        self.scores_ = np.array(scores)
-        return self
-
+        return np.array(scores)
 
 def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Image, theoretical_rdms: Dict[str, np.ndarray], params: Dict[str, Any]) -> Dict[str, nib.Nifti1Image]:
     """
@@ -224,20 +233,20 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, mask_img: nib.Nifti1Imag
         verbose=10
     )
     
-    # The 'y' parameter is not used by our custom estimator, so we can pass None
-    # or a dummy variable of the correct length.
+    # The 'y' parameter is not used by our custom estimator, so we can pass None.
     searchlight.fit(beta_maps_img, y=None)
     
     # --- 3. Create and Return Result Maps ---
+    # The searchlight.scores_ attribute is now correctly populated by the .score() method.
     model_names = sorted(theoretical_rdms_vec.keys())
     result_maps = {}
     for i, model_name in enumerate(model_names):
-        # The searchlight.scores_ attribute is now correctly populated
-        # with shape (n_voxels, n_models). We select the column for the current model.
+        # The searchlight.scores_ attribute has shape (n_voxels, n_models). 
+        # We select the column for the current model.
         score_map = searchlight.scores_[:, i]
         
         # Unmask the scores back into a Nifti image
-        result_map_img = image.new_img_like(mask_img, score_map.astype('float32'))
+        result_map_img = image.new_img_like(mask_img, score_map.astype('float32'), affine=mask_img.affine)
         result_maps[model_name] = result_map_img
         
     return result_maps
