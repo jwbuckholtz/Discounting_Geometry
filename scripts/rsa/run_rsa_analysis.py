@@ -380,7 +380,11 @@ def main() -> None:
             # For whole-brain, we will run the cross-validated RSA
             masker = NiftiMasker(mask_img=mask_img, standardize=False) # standardize in pipeline if needed
             voxel_data = masker.fit_transform(beta_maps_valid)
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups, analysis_params)
+            
+            # CRITICAL FIX: Ensure the groups array is filtered with the same mask as the data
+            groups_valid = groups[base_valid_trials_mask]
+            
+            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups_valid, analysis_params)
             save_results(args.subject, rsa_results, output_dir, 'whole_brain')
             
     elif args.analysis_type == 'roi':
@@ -407,8 +411,11 @@ def main() -> None:
             beta_maps_valid = image.index_img(beta_maps_img, base_valid_trials_mask)
             voxel_data = masker.fit_transform(beta_maps_valid)
             
+            # CRITICAL FIX: Ensure the groups array is filtered with the same mask as the data
+            groups_valid = groups[base_valid_trials_mask]
+            
             # Run the cross-validated RSA
-            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups, analysis_params)
+            rsa_results = run_crossval_rsa(voxel_data, theoretical_rdms, groups_valid, analysis_params)
             
             # Save the cross-validated results
             output_dir = derivatives_dir / 'rsa' / args.subject
