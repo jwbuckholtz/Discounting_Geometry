@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
-import os
 import argparse
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 import logging
 
 from scripts.utils import load_config, setup_logging
@@ -241,32 +240,46 @@ def _parse_bids_filename(filename: Path) -> Dict[str, str]:
             entities[key] = value
     return entities
 
+def _find_bids_events_files(onsets_dir: Path, subject_id: str, task: str) -> List[Path]:
+    """
+    Robustly find BIDS event files for a specific subject and task.
+    
+    This function uses a systematic approach to prevent glob pattern bugs:
+    1. Use exact BIDS entity matching instead of wildcards
+    2. Validate each file with BIDS parsing
+    3. Return only confirmed matches
+    
+    Args:
+        onsets_dir: Directory containing event files
+        subject_id: Full subject ID (e.g., 'sub-01')
+        task: Task name (e.g., 'discountFix')
+    
+    Returns:
+        List of Path objects for matching event files
+    """
+    subject_label = subject_id.split('-')[-1]  # Extract '01' from 'sub-01'
+    
+    # Strategy: Find all event files, then filter with precise BIDS parsing
+    # This avoids glob pattern ambiguities entirely
+    all_event_files = list(onsets_dir.glob('*_events.tsv'))
+    
+    matching_files = []
+    for f in all_event_files:
+        entities = _parse_bids_filename(f)
+        
+        # Exact match on subject and task
+        if entities.get('sub') == subject_label and entities.get('task') == task:
+            matching_files.append(f)
+    
+    return sorted(matching_files)
+
 def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Path, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Use precise BIDS-compliant search for discount-fix events
-    # Use the full subject_id to avoid matching other subjects with similar IDs
-    event_files = []
-    
-    # Search specifically for discount-fix task files with exact subject match
-    for pattern in [f'{subject_id}_*task-discountFix*_events.tsv', 
-                   f'{subject_id}_task-discountFix*_events.tsv']:
-        event_files.extend(onsets_dir.glob(pattern))
-    
-    # Remove duplicates and sort
-    event_files = sorted(list(set(event_files)))
-    
-    # Double-check with BIDS parsing to ensure exact match
-    subject_label = subject_id.split('-')[-1]
-    validated_files = []
-    for f in event_files:
-        entities = _parse_bids_filename(f)
-        if entities.get('sub') == subject_label and entities.get('task') == 'discountFix':
-            validated_files.append(f)
-    
-    event_files = validated_files
+    # Use the robust BIDS file finder to avoid glob pattern bugs
+    event_files = _find_bids_events_files(onsets_dir, subject_id, 'discountFix')
     
     if not event_files:
         logging.warning(f"No valid BIDS event files found for {subject_id} and task 'discountFix'")
@@ -276,15 +289,20 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     all_runs_data = []
     
     # First, parse files with explicit run numbers to reserve those IDs
+    # Include session information to avoid false collisions across sessions
     explicit_runs = {}  # path -> run_id
-    run_ids = []
+    run_session_pairs = []  # List of (session, run) tuples to check for duplicates
     unnumbered_files = []
+    
     for f in event_files:
+        entities = _parse_bids_filename(f)
+        session = entities.get('ses', 'none')  # Default to 'none' if no session
+        
         if '_run-' in f.name:
             try:
                 run_part = f.stem.split('_run-')[1]
                 run_id = int(run_part.split('_')[0])
-                run_ids.append(run_id)
+                run_session_pairs.append((session, run_id))
                 explicit_runs[f] = run_id
             except (ValueError, IndexError):
                 logging.warning(f"Could not parse run number from '{f.name}'; will assign a unique ID.")
@@ -292,9 +310,10 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
         else:
             unnumbered_files.append(f)
 
-    # Check for duplicate run numbers *after* parsing all of them
-    if len(run_ids) != len(set(run_ids)):
-        raise ValueError(f"Duplicate run numbers detected for {subject_id}. Please check filenames.")
+    # Check for duplicate (session, run) pairs *after* parsing all of them
+    if len(run_session_pairs) != len(set(run_session_pairs)):
+        duplicates = [pair for pair in set(run_session_pairs) if run_session_pairs.count(pair) > 1]
+        raise ValueError(f"Duplicate (session, run) combinations detected for {subject_id}: {duplicates}. Please check filenames.")
 
     # Process explicitly numbered files
     for f, run_id in explicit_runs.items():
