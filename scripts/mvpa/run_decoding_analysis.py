@@ -269,9 +269,10 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
     # --- 4. Get CV Parameters ---
     if is_categorical:
         cv_params = {
-            'n_splits': analysis_params['cv_folds'],
-            'random_state': analysis_params.get('random_state', 42)
+            'n_splits': analysis_params['cv_folds']
         }
+        # StratifiedGroupKFold does not accept random_state without shuffle,
+        # and shuffling is not typically done with grouped data.
     else:
         cv_params = {'n_splits': analysis_params['cv_folds']}
         

@@ -140,19 +140,21 @@ def run_rsa(neural_rdm: np.ndarray, theoretical_rdms: Dict[str, np.ndarray]) -> 
             
     return rsa_results
 
-def run_crossval_rsa(voxel_data: np.ndarray, theoretical_rdms: Dict[str, np.ndarray], groups: np.ndarray, cv_params: Dict[str, Any]) -> Dict[str, np.ndarray]:
+def run_crossval_rsa(voxel_data: np.ndarray, theoretical_rdms: Dict[str, np.ndarray], groups: np.ndarray,
+cv_params: Dict[str, Any]) -> Dict[str, np.ndarray]:
     """
     Performs a cross-validated RSA, respecting data groups (e.g., runs).
     """
     n_trials = voxel_data.shape[0]
     # Folds can't exceed number of groups
-    n_splits = min(cv_params['n_splits'], len(np.unique(groups)))
-    gkf = GroupKFold(n_splits=n_splits) 
+    n_splits = min(cv_params['rsa']['cv_folds'], len(np.unique(groups)))
+    
+    cv = GroupKFold(n_splits=n_splits)
     
     results = {name: [] for name in theoretical_rdms.keys()}
 
-    for fold, (train_idx, test_idx) in enumerate(gkf.split(X=np.arange(n_trials), groups=groups)):
-        logging.info(f"  - Running Fold {fold+1}/{gkf.n_splits}...")
+    for fold, (train_idx, test_idx) in enumerate(cv.split(X=np.arange(n_trials), groups=groups)):
+        logging.info(f"  - Running Fold {fold+1}/{cv.n_splits}...")
         
         # 1. Calculate the cross-fold neural RDM portion
         neural_rdm_part = cdist(voxel_data[train_idx], voxel_data[test_idx], metric='correlation').flatten()

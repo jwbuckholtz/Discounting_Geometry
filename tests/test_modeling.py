@@ -28,7 +28,7 @@ def test_prepare_run_events_unit():
         'onset': [10, 20, 30, 40],
         'duration': [1, 1, 1, 1],
         'sv_modulator': [1, 2, 3, 4],       # Should be mean-centered
-        'zero_modulator': [2, 2, 2, 2]      # Should remain 2 (mean-centered to 0 later)
+        'zero_modulator': [2, 2, 2, 2]      # Should be dropped
     })
     
     all_modulators = ['sv_modulator', 'zero_modulator', 'missing_modulator']
@@ -37,23 +37,27 @@ def test_prepare_run_events_unit():
     prepared_df = prepare_run_events(events_df.copy(), all_modulators)
     
     # --- 3. Assertions ---
-    # Assert that the mean of the 'sv_modulator' is now close to zero
-    assert np.isclose(prepared_df['sv_modulator'].mean(), 0.0), \
+    # The DataFrame should now be in long format
+    
+    # Check the main 'mean' regressor
+    mean_events = prepared_df[prepared_df['trial_type'] == 'mean']
+    assert len(mean_events) == 4
+    assert np.allclose(mean_events['modulation'], 1)
+
+    # Check the 'sv_modulator' parametric modulator
+    sv_events = prepared_df[prepared_df['trial_type'] == 'sv_modulator']
+    assert len(sv_events) == 4
+    assert np.isclose(sv_events['modulation'].mean(), 0.0), \
         "Modulator with variance was not correctly mean-centered."
+
+    # Assert that the zero-variance modulators were dropped
+    assert 'zero_modulator' not in prepared_df['trial_type'].unique()
+    assert 'missing_modulator' not in prepared_df['trial_type'].unique()
         
-    # Assert that the zero-variance modulator is now all zeros after centering
-    assert np.allclose(prepared_df['zero_modulator'], 0.0), \
-        "Zero-variance modulator was not correctly centered to zero."
-        
-    # Assert that the 'missing_modulator' was added and is all zeros
-    assert 'missing_modulator' in prepared_df.columns, \
-        "Missing modulator column was not added."
-    assert np.allclose(prepared_df['missing_modulator'], 0.0), \
-        "Missing modulator column was not filled with zeros."
-        
-    # Assert that the 'trial_type' column was added correctly
-    assert 'trial_type' in prepared_df.columns and (prepared_df['trial_type'] == 'mean').all(), \
-        "'trial_type' column was not added or has incorrect values."
+    # Assert that the 'trial_type' column was added correctly and contains expected values
+    assert 'trial_type' in prepared_df.columns
+    assert 'mean' in prepared_df['trial_type'].unique()
+    assert 'sv_modulator' in prepared_df['trial_type'].unique()
         
     # Assert that the original columns were not dropped
     assert 'onset' in prepared_df.columns and 'duration' in prepared_df.columns, \
@@ -91,7 +95,6 @@ def synthetic_glm_dataset(tmp_path_factory):
     events_df = pd.DataFrame({
         'onset': np.linspace(5, (n_scans - 10) * tr, n_trials),
         'duration': np.ones(n_trials) * 1.0,
-        'trial_type': ['decision'] * n_trials,
         'choice': np.random.choice([0, 1], n_trials),
         'SVchosen': np.random.rand(n_trials) * 10,
         'run': [1] * n_trials
@@ -113,6 +116,7 @@ def synthetic_glm_dataset(tmp_path_factory):
     subject_data = {
         'subject_id': sub_id,
         'bold_imgs': [str(bold_path)],
+        'run_numbers': [1],
         'mask_file': str(mask_path),
         'events_df': events_df,
         'confounds_dfs': [confounds_df],

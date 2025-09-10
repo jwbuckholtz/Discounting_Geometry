@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import gamma
 from nilearn.glm.first_level import FirstLevelModel
-from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
+from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any
 import logging
 from nilearn import image
@@ -12,33 +12,38 @@ from functools import reduce
 
 def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) -> pd.DataFrame:
     """
-    Prepares a single run's event DataFrame for the GLM.
-    - Fills NaNs in modulator columns with the column mean.
-    - Mean-centers all parametric modulators.
-    - Removes any modulators that have zero variance after cleaning.
-    - Formats the DataFrame for Nilearn.
+    Prepares a single run's event DataFrame for the GLM in the format Nilearn expects
+    for parametric modulation.
     """
-    run_events_df['trial_type'] = 'mean'
-    final_modulator_cols = []
-
+    # Clean and mean-center all potential modulator columns first
     for col in all_modulator_cols:
         if col not in run_events_df.columns:
             run_events_df[col] = 0
-        
-        # CRITICAL FIX: Fill NaNs with the mean of the non-NaN values
         run_events_df[col] = run_events_df[col].fillna(run_events_df[col].mean())
-        
-        # CRITICAL FIX: Always mean-center.
         run_events_df[col] -= run_events_df[col].mean()
-        
-        # CRITICAL FIX: Drop columns with no variance to prevent singular matrices
-        if not np.isclose(run_events_df[col].var(), 0):
-            final_modulator_cols.append(col)
-        else:
-            logging.warning(f"Modulator '{col}' has zero variance and will be dropped from the design matrix.")
 
-    nilearn_events_cols = ['onset', 'duration', 'trial_type'] + final_modulator_cols
-    return run_events_df[nilearn_events_cols]
+    # Base events for the main effect of each trial
+    events_base = run_events_df[['onset', 'duration']].copy()
+    events_base['trial_type'] = 'mean'
+    events_base['modulation'] = 1
+    
+    # Create new event rows for each parametric modulator
+    events_modulated_list = [events_base]
+    for modulator in all_modulator_cols:
+        # Skip modulators with no variance after centering
+        if np.isclose(run_events_df[modulator].var(), 0):
+            logging.warning(f"Modulator '{modulator}' has zero variance and will be dropped.")
+            continue
+            
+        modulator_events = run_events_df[['onset', 'duration']].copy()
+        modulator_events['trial_type'] = modulator # Regressor will be named after the column
+        modulator_events['modulation'] = run_events_df[modulator]
+        events_modulated_list.append(modulator_events)
+
+    # Combine all event types into a single long-format DataFrame
+    final_events_df = pd.concat(events_modulated_list, ignore_index=True)
+    
+    return final_events_df
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
@@ -84,25 +89,20 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    full_design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)
-    contrasts_to_compute = ['mean'] + analysis_params['glm']['parametric_modulators']
+    # We are interested in the 'mean' effect and the parametric modulators.
+    # We need to check if they exist in the design matrix, as some might have been dropped.
+    design_matrix_columns = glm.design_matrices_[0].columns
+    contrasts_to_compute = ['mean'] + all_modulator_cols
     
     for contrast_name in contrasts_to_compute:
-        if contrast_name == 'mean':
-            contrast_cols = [col for col in full_design_matrix.columns if col.startswith('mean') and 'x' not in col]
-        else:
-            contrast_cols = [col for col in full_design_matrix.columns if col.startswith(f'meanx{contrast_name}')]
-
-        if not contrast_cols:
-            logging.warning(f"Contrast '{contrast_name}' not found in design matrix. Skipping.")
+        if contrast_name not in design_matrix_columns:
+            logging.warning(
+                f"Contrast '{contrast_name}' not found in design matrix columns. Skipping."
+            )
             continue
-
-        contrast_vector = np.zeros(full_design_matrix.shape[1])
-        weight = 1.0 / len(contrast_cols)
-        for col in contrast_cols:
-            contrast_vector[full_design_matrix.columns.get_loc(col)] = weight
-        
-        z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
+            
+        # The regressor names are now directly the trial_type names
+        z_map = glm.compute_contrast(contrast_name, output_type='z_score')
         
         contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
         z_map.to_filename(contrast_filename)

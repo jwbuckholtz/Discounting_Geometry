@@ -159,46 +159,6 @@ def find_subject_runs(fmriprep_dir: Path, subject_id: str) -> List[Dict[str, str
     
     return run_files
 
-def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str) -> Dict[str, Any]:
-    """
-    Loads and concatenates all functional data for a subject across all runs.
-    """
-    config = load_config(config_path)
-    env_config = config[env]
-    derivatives_dir = Path(env_config['derivatives_dir'])
-    fmriprep_dir = Path(env_config['fmriprep_dir'])
-
-    # 1. Find all runs
-    run_files = find_subject_runs(fmriprep_dir, subject_id)
-    print(f"Found {len(run_files)} runs for subject {subject_id}")
-
-    # 2. Load and concatenate BOLD images and confounds
-    bold_imgs = [run['bold'] for run in run_files]
-    confounds_dfs = [pd.read_csv(run['confounds'], sep='\t') for run in run_files]
-    run_numbers = [int(run['run_id']) for run in run_files] # Extract run numbers
-
-    # 3. Load the run-aware behavioral file
-    events_file = find_behavioral_sv_file(derivatives_dir, subject_id)
-    events_df = pd.read_csv(events_file, sep='\t')
-    
-    # 4. Create the groups array for cross-validation
-    groups = events_df['run'].values
-
-    # 5. Use the mask from the first run (assuming all are aligned)
-    mask_file = run_files[0]['mask']
-
-    return {
-        "subject_id": subject_id,
-        "run_files": run_files, # Return the full run info
-        "bold_imgs": bold_imgs,
-        "run_numbers": run_numbers,
-        "mask_file": mask_file,
-        "events_df": events_df,
-        "confounds_dfs": confounds_dfs,
-        "groups": groups,
-        "derivatives_dir": derivatives_dir
-    }
-
 def load_modeling_data(config_path: str, env: str, subject_id: str) -> Dict[str, Any]:
     """
     The definitive data loader for first-level modeling (GLM and LSS).

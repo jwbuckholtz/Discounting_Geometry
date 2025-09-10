@@ -50,6 +50,8 @@ def synthetic_rsa_dataset(tmp_path_factory):
     
     # --- 4. Create behavioral data ---
     events_df = pd.DataFrame({
+        "onset": np.linspace(5, 390, n_trials),
+        "duration": np.ones(n_trials),
         "trial_type": ["decision"] * n_trials,
         "choice": choices,
         "SVchosen": np.random.rand(n_trials) * 10, # A random variable
