@@ -4,7 +4,7 @@
 #SBATCH --output=logs/glm_batch_%A_%a.out  # Standard output log, %A=job ID, %a=task ID
 #SBATCH --error=logs/glm_batch_%A_%a.err   # Standard error log
 #SBATCH --time=01:00:00                   # 1 hour
-#SBATCH --mem=16G                         # 16 GB of memory (increased from 8G)
+#SBATCH --mem=32G                         # 32 GB of memory (increased from 16G)
 #SBATCH --nodes=1                         # 1 node
 #SBATCH --ntasks=1                        # 1 task
 #SBATCH --cpus-per-task=2                 # 2 CPUs
