@@ -57,51 +57,50 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     )
 
     # --- Prepare Events for Each Run ---
-    # We will create a list of event DataFrames, one for each run.
     events_per_run = []
     cleaned_confounds_dfs = []
     final_bold_imgs = []
 
     # Define the full set of potential modulator columns based on the config
-    all_modulator_cols = params['glm']['parametric_modulators']
+    all_modulator_cols = params['analysis_params']['glm']['parametric_modulators']
 
     for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
         run_number = i + 1
         logging.info(f"  - Preparing data for run {run_number}/{len(bold_imgs)}")
         
-        # Isolate events for the current run
         run_events_df = events_df[events_df['run'] == run_number].copy()
 
-        # If a run has no events, we must exclude it completely from the analysis
         if run_events_df.empty:
             logging.warning(f"No events found for run {run_number}. Excluding this run from the GLM.")
             continue
 
-        # This run is valid, so we keep its data
         final_bold_imgs.append(bold_img)
+        cleaned_confounds_dfs.append(confounds_df)
 
-        # Clean confounds for this run
-        if confounds_df.isnull().values.any():
-            logging.warning(f"NaNs found in confounds for run {run_number}. Filling with 0.")
-            cleaned_confounds_dfs.append(confounds_df.fillna(0))
-        else:
-            cleaned_confounds_dfs.append(confounds_df)
-
-        # Normalize onsets to be relative to the start of the run
+        # Normalize onsets to be relative to the start of the run's events
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
-        logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
-
-        # Add a 'trial_type' column for Nilearn's GLM
+        
         run_events_df['trial_type'] = 'mean'
         
-        # Ensure all potential modulator columns exist for this run, filling with 0 if absent
+        # --- Parametric Modulator Processing ---
+        # 1. Ensure all potential modulator columns exist, filling with 0 if absent
         for col in all_modulator_cols:
             if col not in run_events_df.columns:
                 run_events_df[col] = 0
         
-        # Select and order columns consistently
-        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
+        # 2. Mean-center any non-zero modulators for this run
+        for col in all_modulator_cols:
+            if run_events_df[col].std() > 0:
+                run_events_df[col] -= run_events_df[col].mean()
+
+        # 3. Identify and remove any zero-variance modulators for this run
+        final_modulators = [col for col in all_modulator_cols if run_events_df[col].std() > 0]
+        if len(final_modulators) < len(all_modulator_cols):
+            omitted = set(all_modulator_cols) - set(final_modulators)
+            logging.info(f"    Omitting zero-variance modulators for this run: {list(omitted)}")
+
+        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + final_modulators
         events_per_run.append(run_events_df[nilearn_events_cols])
             
     # --- Fit the GLM with all valid runs ---
@@ -113,48 +112,36 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     glm.fit(final_bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    # This logic now correctly handles multi-run models by averaging across runs.
-    design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)
+    design_matrices = glm.design_matrices_
+    
+    # In case of multiple runs, we concatenate. For single run, this is just the one matrix.
+    full_design_matrix = pd.concat(design_matrices, ignore_index=True)
     
     contrasts_to_compute = ['mean'] + params['analysis_params']['glm']['parametric_modulators']
     
     for contrast_name in contrasts_to_compute:
         # Identify all columns in the design matrix related to this contrast
         if contrast_name == 'mean':
-            # Main effect columns don't have parametric modulators
-            contrast_cols = [col for col in design_matrix.columns if col.startswith('mean') and 'x' not in col]
+            contrast_cols = [col for col in full_design_matrix.columns if col.startswith('mean') and 'x' not in col]
         else:
-            # Parametric modulator columns
-            contrast_cols = [col for col in design_matrix.columns if col.startswith(f'meanx{contrast_name}')]
+            contrast_cols = [col for col in full_design_matrix.columns if col.startswith(f'meanx{contrast_name}')]
 
-        # Skip contrast if no corresponding columns were found in the model
         if not contrast_cols:
-            logging.warning(f"Contrast '{contrast_name}' not found in any design matrix. Skipping.")
-            continue
-            
-        # CRITICAL FIX: Skip contrast if the regressor(s) had zero variance (e.g., all zeros)
-        if design_matrix[contrast_cols].std().sum() == 0:
-            logging.warning(f"Regressor(s) for contrast '{contrast_name}' have zero variance. Skipping contrast.")
+            logging.warning(f"Contrast '{contrast_name}' not found in any design matrix (likely omitted due to zero variance). Skipping.")
             continue
 
-        # Build the contrast vector, averaging across runs
-        contrast_vector = np.zeros(design_matrix.shape[1])
+        # Build the contrast vector, correctly averaging over all runs
+        contrast_vector = np.zeros(full_design_matrix.shape[1])
+        weight = 1.0 / len(contrast_cols)
         for col in contrast_cols:
-            contrast_vector[design_matrix.columns.get_loc(col)] = 1.0 / len(contrast_cols)
+            contrast_vector[full_design_matrix.columns.get_loc(col)] = weight
         
-        # --- Compute and Save Contrast ---
-        logging.info(f"  - Computing contrast for '{contrast_name}' (averaging over {len(contrast_cols)} run(s))...")
+        logging.info(f"  - Computing contrast for '{contrast_name}' (averaging over {len(contrast_cols)} column(s))...")
         z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
         
-        # Save the z-map
         contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
         z_map.to_filename(contrast_filename)
         logging.info(f"Saved z-map to: {contrast_filename.resolve()}")
-
-        if contrast_filename.exists():
-            logging.info(f"  [SUCCESS] File check passed for {contrast_filename.name}")
-        else:
-            logging.error(f"  [FAILURE] File check failed for {contrast_filename.name}")
 
 def make_contrast_vector(columns, condition_weights: Dict[str, float]) -> np.ndarray:
     """Helper function to create a contrast vector from a dictionary of weights."""
