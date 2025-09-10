@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn import image
-from scripts.utils import load_concatenated_subject_data, load_config, setup_logging
+from scripts.utils import load_config, setup_logging, load_modeling_data
 from typing import Dict, Any
 import logging
 import numpy as np
@@ -18,31 +18,9 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
-    run_files = subject_data['run_files']
     
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
     
-    # --- Data Pruning ---
-    runs_with_events = events_df['run'].unique()
-    valid_run_indices = [i for i, run in enumerate(run_files) if int(run['run_id']) in runs_with_events]
-    
-    if len(valid_run_indices) < len(run_files):
-        logging.warning(f"Pruning {len(run_files) - len(valid_run_indices)} run(s) with no matching events.")
-    
-    bold_imgs = [bold_imgs[i] for i in valid_run_indices]
-    confounds_dfs = [confounds_dfs[i] for i in valid_run_indices] if confounds_dfs else None
-
-    if not bold_imgs:
-        logging.error("No valid runs with event data found. Aborting.")
-        return
-
-    # Standardize confound columns across all valid runs for this subject
-    if confounds_dfs:
-        all_confound_columns = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
-        cleaned_confounds_dfs = [df.reindex(columns=all_confound_columns, fill_value=0) for df in confounds_dfs]
-    else:
-        cleaned_confounds_dfs = None # Use None if no confounds exist
-
     # --- Onset Normalization ---
     corrected_events_list = []
     for run_number in sorted(events_df['run'].unique()):
@@ -52,10 +30,6 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
             run_events_df['onset'] -= first_onset_in_run
             corrected_events_list.append(run_events_df)
     
-    if not corrected_events_list:
-        logging.error(f"No valid event data found for any run for subject {subject_id}. Aborting.")
-        return
-
     events_df = pd.concat(corrected_events_list, ignore_index=True)
 
     # --- GLM Specification ---
@@ -115,7 +89,7 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
             continue
 
         # --- Fit the GLM for this single trial ---
-        glm.fit(bold_imgs, events=lss_events_list, confounds=cleaned_confounds_dfs)
+        glm.fit(bold_imgs, events=lss_events_list, confounds=confounds_dfs)
 
         # --- Extract and Store the Beta Map ---
         # The contrast is simply the name of the trial_type for our trial of interest
@@ -145,8 +119,8 @@ def main() -> None:
     # Load the full config
     config = load_config(args.config)
     
-    # Load all data for the subject using the utility function
-    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    # Load all data for the subject using the new, definitive utility function
+    subject_data = load_modeling_data(args.config, args.env, args.subject)
     
     # Pass the full config to the analysis function
     run_lss_for_subject(subject_data, config)

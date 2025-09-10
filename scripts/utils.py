@@ -7,6 +7,7 @@ from nilearn.interfaces.fmriprep import load_confounds_strategy
 from typing import Dict, Any, List, Tuple
 import nibabel as nib
 import logging
+from functools import reduce
 
 def setup_logging():
     """Sets up a simple logging configuration."""
@@ -183,5 +184,59 @@ def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str)
         "events_df": events_df,
         "confounds_dfs": confounds_dfs,
         "groups": groups,
+        "derivatives_dir": derivatives_dir
+    }
+
+def load_modeling_data(config_path: str, env: str, subject_id: str) -> Dict[str, Any]:
+    """
+    The definitive data loader for first-level modeling (GLM and LSS).
+
+    - Finds all BOLD, confound, and mask files for a subject.
+    - Loads the single, consolidated event file.
+    - Prunes any runs that do not have corresponding events.
+    - Standardizes confound columns across all valid runs using their UNION.
+    - Returns a dictionary of all necessary, aligned data.
+    """
+    config = load_config(config_path)
+    env_config = config[env]
+    derivatives_dir = Path(env_config['derivatives_dir'])
+    fmriprep_dir = Path(env_config['fmriprep_dir'])
+
+    # 1. Find all potential runs and their files
+    all_run_files = find_subject_runs(fmriprep_dir, subject_id)
+    
+    # 2. Load the single, consolidated event file
+    events_file = find_behavioral_sv_file(derivatives_dir, subject_id)
+    events_df = pd.read_csv(events_file, sep='\t')
+    
+    # 3. Prune runs that do not have corresponding events
+    runs_with_events = events_df['run'].unique()
+    valid_run_files = [run for run in all_run_files if int(run['run_id']) in runs_with_events]
+    
+    if len(valid_run_files) < len(all_run_files):
+        logging.warning(f"Pruned {len(all_run_files) - len(valid_run_files)} run(s) with no matching events.")
+        
+    if not valid_run_files:
+        raise FileNotFoundError(f"No valid runs with event data found for subject {subject_id}.")
+
+    # 4. Load the data for the valid runs
+    bold_imgs = [run['bold'] for run in valid_run_files]
+    confounds_dfs = [pd.read_csv(run['confounds'], sep='\t') for run in valid_run_files]
+    run_numbers = [int(run['run_id']) for run in valid_run_files]
+    mask_file = valid_run_files[0]['mask']
+
+    # 5. Standardize confounds using the UNION of columns
+    if confounds_dfs:
+        all_confound_cols = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
+        confounds_dfs = [df.reindex(columns=all_confound_cols, fill_value=0) for df in confounds_dfs]
+        logging.info(f"Standardized confounds to {len(all_confound_cols)} columns across {len(valid_run_files)} runs.")
+
+    return {
+        "subject_id": subject_id,
+        "bold_imgs": bold_imgs,
+        "run_numbers": run_numbers,
+        "mask_file": mask_file,
+        "events_df": events_df,
+        "confounds_dfs": confounds_dfs,
         "derivatives_dir": derivatives_dir
     }

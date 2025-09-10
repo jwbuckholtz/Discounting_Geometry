@@ -19,15 +19,13 @@ def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) ->
     """
     run_events_df['trial_type'] = 'mean'
     
-    # Ensure all potential modulator columns exist and mean-center them
     for col in all_modulator_cols:
         if col not in run_events_df.columns:
             run_events_df[col] = 0
         
-        # CRITICAL FIX: Always mean-center. Constant columns become all zeros.
+        # CRITICAL FIX: Always mean-center. Constant columns will become all zeros.
         run_events_df[col] -= run_events_df[col].mean()
     
-    # Return only the columns Nilearn needs, in a consistent order
     nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
     return run_events_df[nilearn_events_cols]
 
@@ -37,7 +35,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
-    run_numbers = subject_data['run_numbers'] # Get the actual run numbers
+    run_numbers = subject_data['run_numbers']
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
@@ -46,13 +44,6 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     output_dir = derivatives_dir / 'standard_glm' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # CRITICAL FIX: Standardize confounds using the UNION of columns
-    if confounds_dfs:
-        all_confound_columns = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
-        confounds_dfs = [df.reindex(columns=all_confound_columns, fill_value=0) for df in confounds_dfs]
-        logging.info(f"Standardized confounds to {len(all_confound_columns)} common columns across {len(confounds_dfs)} runs.")
-    
-    # --- Model Specification ---
     analysis_params = params['analysis_params']
     glm = FirstLevelModel(
         t_r=analysis_params['t_r'],
@@ -66,37 +57,20 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # --- Prepare Events for Each Run ---
     events_per_run = []
-    final_bold_imgs = []
-    final_confounds_dfs = []
     all_modulator_cols = analysis_params['glm']['parametric_modulators']
 
-    # CRITICAL FIX: Iterate over actual run numbers, not sequential indices
-    for run_number, bold_img, confounds_df in zip(run_numbers, bold_imgs, confounds_dfs):
+    for run_number in run_numbers:
         run_events_df = events_df[events_df['run'] == run_number].copy()
-
-        if run_events_df.empty:
-            logging.warning(f"No events found for run {run_number}. Pruning this run from the analysis.")
-            continue # Skip this run completely
-        
-        # This run is valid, so we keep all its data
-        final_bold_imgs.append(bold_img)
-        final_confounds_dfs.append(confounds_df)
         
         # Normalize onsets
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
         
-        # Process events using the new helper function
         prepared_events = prepare_run_events(run_events_df, all_modulator_cols)
         events_per_run.append(prepared_events)
             
-    # CRITICAL FIX: Exit gracefully if all runs were pruned
-    if not final_bold_imgs:
-        logging.error(f"No runs with any valid event data found for subject {subject_id}. Aborting GLM.")
-        return
-
     # --- Fit the GLM ---
-    glm.fit(final_bold_imgs, events=events_per_run, confounds=final_confounds_dfs)
+    glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
     full_design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)
@@ -145,8 +119,8 @@ def main() -> None:
     # Load the full config
     config = load_config(args.config)
     
-    # Load all data for the subject using the utility function
-    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    # Load all data for the subject using the new, definitive utility function
+    subject_data = load_modeling_data(args.config, args.env, args.subject)
     
     # Pass the full config to the analysis function
     run_standard_glm_for_subject(subject_data, config)
