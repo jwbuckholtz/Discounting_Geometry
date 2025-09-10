@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Tuple
 import nibabel as nib
 import logging
 from functools import reduce
+import re
 
 def setup_logging():
     """Sets up a simple logging configuration."""
@@ -120,6 +121,9 @@ def find_subject_runs(fmriprep_dir: Path, subject_id: str) -> List[Dict[str, str
     fmriprep_path = Path(fmriprep_dir)
     subject_path = fmriprep_path / subject_id
     run_files = []
+    
+    # Regex to extract run number
+    run_pattern = re.compile(r'_run-(\d+)_')
 
     for ses_path in sorted(subject_path.glob('ses-*')):
         func_path = ses_path / 'func'
@@ -130,6 +134,13 @@ def find_subject_runs(fmriprep_dir: Path, subject_id: str) -> List[Dict[str, str
         bold_files = sorted(list(func_path.glob(f'{subject_id}_{ses_path.name}_task-discountFix*_desc-preproc_bold.nii.gz')))
         
         for bold_path in bold_files:
+            # Extract run_id from filename
+            match = run_pattern.search(bold_path.name)
+            if not match:
+                logging.warning(f"Could not extract run number from {bold_path.name}. Skipping this file.")
+                continue
+            run_id = match.group(1)
+
             file_prefix = bold_path.name.split('_desc-preproc_bold.nii.gz')[0]
             mask_path = func_path / f'{file_prefix}_desc-brain_mask.nii.gz'
             confounds_prefix = bold_path.name.split('_space-')[0]
@@ -139,7 +150,8 @@ def find_subject_runs(fmriprep_dir: Path, subject_id: str) -> List[Dict[str, str
                 run_files.append({
                     "bold": str(bold_path),
                     "mask": str(mask_path),
-                    "confounds": str(confounds_path)
+                    "confounds": str(confounds_path),
+                    "run_id": run_id
                 })
     
     if not run_files:

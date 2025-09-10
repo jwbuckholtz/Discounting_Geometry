@@ -13,20 +13,31 @@ from functools import reduce
 def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) -> pd.DataFrame:
     """
     Prepares a single run's event DataFrame for the GLM.
-    - Ensures all modulator columns exist.
+    - Fills NaNs in modulator columns with the column mean.
     - Mean-centers all parametric modulators.
+    - Removes any modulators that have zero variance after cleaning.
     - Formats the DataFrame for Nilearn.
     """
     run_events_df['trial_type'] = 'mean'
-    
+    final_modulator_cols = []
+
     for col in all_modulator_cols:
         if col not in run_events_df.columns:
             run_events_df[col] = 0
         
-        # CRITICAL FIX: Always mean-center. Constant columns will become all zeros.
+        # CRITICAL FIX: Fill NaNs with the mean of the non-NaN values
+        run_events_df[col] = run_events_df[col].fillna(run_events_df[col].mean())
+        
+        # CRITICAL FIX: Always mean-center.
         run_events_df[col] -= run_events_df[col].mean()
-    
-    nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
+        
+        # CRITICAL FIX: Drop columns with no variance to prevent singular matrices
+        if not np.isclose(run_events_df[col].var(), 0):
+            final_modulator_cols.append(col)
+        else:
+            logging.warning(f"Modulator '{col}' has zero variance and will be dropped from the design matrix.")
+
+    nilearn_events_cols = ['onset', 'duration', 'trial_type'] + final_modulator_cols
     return run_events_df[nilearn_events_cols]
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
