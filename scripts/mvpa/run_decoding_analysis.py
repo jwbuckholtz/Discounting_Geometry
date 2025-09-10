@@ -58,18 +58,11 @@ def load_data(subject_id: str, derivatives_dir: Path) -> Tuple[nib.Nifti1Image, 
 
     return beta_maps_img, events_df
 
-def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas: int, is_categorical: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Prepares the data for the decoding analysis by creating the labels (y) and
-    identifying the relevant trials. This function is robust to NaNs.
-
-    Args:
-        events_df (pd.DataFrame): The DataFrame of events.
-        target_variable (str): The name of the column to be used as the decoding target.
-        n_betas (int): The number of beta maps, for validation.
-
-    Returns:
-        tuple: A tuple containing (labels, valid_trials_mask, groups, is_categorical).
+    Prepares data for decoding by validating trial counts, extracting labels,
+    handling NaNs, and creating group (run) labels.
+    The decision to treat data as categorical is now passed in.
     """
     # --- 1. Validation ---
     if target_variable not in events_df.columns:
@@ -80,29 +73,21 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
 
     # --- 2. Create Labels and Trial Mask based on NaNs ---
     labels_series = events_df[target_variable].copy()
-    valid_trials_mask = labels_series.notna().values
     
-    # --- 3. Determine if Target is Categorical (before type coercion) ---
-    # This check is more robust than relying on the final numpy dtype.
-    # It checks the original data type or the number of unique values.
-    is_categorical = labels_series.dtype == 'object' or labels_series.nunique() < 3
-
-    # --- 4. Handle Categorical vs. Continuous Targets ---
-    if is_categorical:
-        # For categorical data, factorize only the non-NaN values
-        valid_labels = labels_series[valid_trials_mask]
-        codes, uniques = pd.factorize(valid_labels)
-        
-        logging.info(f"Found {len(uniques)} unique labels for categorical target '{target_variable}': {uniques.tolist()}")
-        
-        # Create a new float array to store codes, preserving NaNs elsewhere
-        final_labels = np.full(labels_series.shape, np.nan)
-        final_labels[valid_trials_mask] = codes
+    if labels_series.isnull().any():
+        valid_trials_mask = labels_series.notna().values
+        labels_valid = labels_series[valid_trials_mask].values
     else:
-        # For numeric data, just use the values
-        final_labels = labels_series.values
+        valid_trials_mask = np.ones(len(labels_series), dtype=bool)
+        labels_valid = labels_series.values
 
-    # --- 5. Get Grouping Variable (for CV) ---
+    # Factorize labels for classification if specified
+    if is_categorical:
+        final_labels, _ = pd.factorize(labels_valid)
+    else:
+        final_labels = labels_valid.astype(float)
+        
+    # --- 3. Get Grouping Variable (for CV) ---
     if 'run' in events_df.columns:
         groups = events_df['run'].values
     else:
@@ -111,7 +96,7 @@ def prepare_decoding_data(events_df: pd.DataFrame, target_variable: str, n_betas
         logging.warning("No 'run' column found in events data. Cannot use GroupKFold for cross-validation.")
         groups = None
 
-    return final_labels, valid_trials_mask, groups, is_categorical
+    return final_labels, valid_trials_mask, groups
 
 def get_estimator(estimator_name: str, is_categorical: bool) -> Pipeline:
     """
@@ -235,10 +220,13 @@ def save_results(subject_id: str, target_variable: str, scores: np.ndarray, outp
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     results_df = pd.DataFrame({
-        'scores': scores, # Use 'scores' for consistency
+        'scores': scores,
         'fold': range(1, len(scores) + 1),
         'subject_id': subject_id,
-        'roi': roi_name
+        'roi': roi_name,
+        'target_variable': target_variable,
+        'scoring': scoring,
+        'estimator': estimator
     })
     
     output_filename = f'{subject_id}_target-{target_variable}_roi-{roi_name}_estimator-{estimator}_scoring-{scoring}_decoding-scores.tsv'
@@ -262,13 +250,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
     beta_maps_img = image.load_img(lss_betas_path)
     events_df = pd.read_csv(events_path, sep='\t')
     
-    # --- 2. Prepare Data (The robust way) ---
-    labels, valid_trials, groups, is_categorical = prepare_decoding_data(
-        events_df, target, n_betas=beta_maps_img.shape[-1]
-    )
-    
-    # --- 3. Determine Analysis Type & Get Parameters ---
-    # Find which analysis type this target belongs to
+    # --- 2. Determine Analysis Type & Get Parameters ---
     if target in params['mvpa']['classification']['target_variables']:
         analysis_params = params['mvpa']['classification']
         is_categorical = True
@@ -276,19 +258,23 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
         analysis_params = params['mvpa']['regression']
         is_categorical = False
     else:
-        raise ValueError(f"Target '{target}' not defined in classification or regression config.")
+        raise ValueError(f"Target '{target}' is not defined in the project config.")
 
+    # --- 3. Prepare Data ---
+    labels, valid_trials, groups = prepare_decoding_data(
+        events_df, target, n_betas=beta_maps_img.shape[-1], is_categorical=is_categorical
+    )
+    
+    # --- 4. Get CV Parameters ---
     if is_categorical:
         cv_params = {
             'n_splits': analysis_params['cv_folds'],
             'random_state': analysis_params.get('random_state', 42)
         }
-        logging.info(f"Treating '{target}' as a CLASSIFICATION target.")
     else:
         cv_params = {'n_splits': analysis_params['cv_folds']}
-        logging.info(f"Treating '{target}' as a REGRESSION target.")
         
-    # --- 4. Run Decoding ---
+    # --- 5. Run Decoding ---
     # We use the whole-brain mask for this simplified script
     _, mask_path, _ = find_fmriprep_files(fmriprep_dir, subject_id)
     
@@ -307,7 +293,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
         scoring=analysis_params['scoring']
     )
     
-    # --- 5. Save Results ---
+    # --- 6. Save Results ---
     output_dir = derivatives_dir / "mvpa" / subject_id
     save_results(subject_id, target, scores, output_dir, roi_name='whole_brain', estimator=analysis_params['estimator'], scoring=analysis_params['scoring'])
     
@@ -330,12 +316,8 @@ def main():
     # Use the correct config structure: analysis_params -> mvpa
     analysis_params = config['analysis_params']
 
-    # Determine which targets to run
-    if args.target:
-        targets_to_run = [args.target]
-    else:
-        # Use the single 'targets' list from the config
-        targets_to_run = analysis_params['mvpa']['targets']
+    # Determine which targets to run from the single 'targets' list
+    targets_to_run = [args.target] if args.target else analysis_params['mvpa']['targets']
     
     for target in targets_to_run:
         try:
@@ -344,7 +326,7 @@ def main():
                 derivatives_dir=derivatives_dir,
                 fmriprep_dir=fmriprep_dir,
                 target=target,
-                params=analysis_params 
+                params=analysis_params
             )
         except Exception as e:
             logging.error(f"Failed to run decoding for target '{target}'. Error: {e}")

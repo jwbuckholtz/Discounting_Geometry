@@ -6,7 +6,7 @@ from scripts.utils import load_config, setup_logging
 from typing import Dict, Any
 import logging
 
-def run_group_mvpa_stats(derivatives_dir: Path, analysis_params: Dict[str, Any]) -> None:
+def run_group_mvpa_stats(derivatives_dir: Path) -> None:
     """
     Loads all subject MVPA results and runs group-level stats,
     intelligently selecting the null hypothesis based on the scoring metric.
@@ -14,7 +14,7 @@ def run_group_mvpa_stats(derivatives_dir: Path, analysis_params: Dict[str, Any])
     logging.info(f"--- Running Group MVPA Statistics ---")
     mvpa_dir = derivatives_dir / 'mvpa'
     
-    # Glob for all possible result files
+    # Glob for all possible result files from all subjects
     decoding_files = sorted(list(mvpa_dir.glob(f"sub-*/**/*decoding-scores.tsv")))
     
     if not decoding_files:
@@ -22,25 +22,21 @@ def run_group_mvpa_stats(derivatives_dir: Path, analysis_params: Dict[str, Any])
         
     all_results_df = pd.concat([pd.read_csv(f, sep='\t') for f in decoding_files], ignore_index=True)
     
-    # We need to find out which targets are classification vs regression
-    class_targets = analysis_params['mvpa']['classification']['target_variables']
-    
-    # Calculate mean score for each subject, roi, and target
+    # Calculate mean score for each subject, roi, target, and scoring metric
     subject_means = all_results_df.groupby(['subject_id', 'roi', 'target_variable', 'scoring']).scores.mean().reset_index()
     
-    # --- Perform t-test for each ROI and Target combination ---
+    # --- Perform t-test for each ROI, Target, and Scoring combination ---
     group_stats = []
     for (roi, target, scoring), data in subject_means.groupby(['roi', 'target_variable', 'scoring']):
         scores = data['scores']
         
-        # Determine the correct chance level for the t-test
-        popmean = 0.0 # Default for metrics like R^2
+        # Determine the correct chance level for the t-test based on the metric
+        popmean = 0.0 # Default for metrics like R^2 where chance is 0
         if scoring == 'accuracy':
-            # Assuming binary classification for now
+            # This could be elaborated with n_classes if available, but 0.5 is a robust default for binary
             popmean = 0.5
         elif scoring not in ['r2', 'roc_auc']:
-            logging.warning(f"T-test for scoring metric '{scoring}' is compared against 0, but this may not be appropriate. "
-                            "Consider a permutation test for a more accurate null hypothesis.")
+            logging.warning(f"T-test for scoring metric '{scoring}' is compared against 0. This may not be appropriate.")
 
         ttest_res = pg.ttest(scores, popmean, alternative='greater')
         ttest_res['roi'] = roi
@@ -74,7 +70,7 @@ def main() -> None:
     config = load_config(args.config)
     derivatives_dir = Path(config[args.env]['derivatives_dir'])
 
-    run_group_mvpa_stats(derivatives_dir, config['analysis_params'])
+    run_group_mvpa_stats(derivatives_dir)
 
 if __name__ == "__main__":
     main()

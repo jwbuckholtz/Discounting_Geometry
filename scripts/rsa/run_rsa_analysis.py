@@ -171,7 +171,7 @@ def run_crossval_rsa(voxel_data: np.ndarray, theoretical_rdms: Dict[str, np.ndar
     return {name: np.array(scores) for name, scores in results.items()}
 
 
-class RSASearchlightEstimator(BaseEstimator):
+class RSASearchlightEstimator:
     """
     A scikit-learn compatible estimator for running RSA within a searchlight.
     """
@@ -180,8 +180,8 @@ class RSASearchlightEstimator(BaseEstimator):
 
     def fit(self, X, y, theoretical_rdm=None, **kwargs):
         """
-        Fit the RSA model. We ignore X and y, and instead store the
-        theoretical_rdm that is passed as a fit_param.
+        Stores the full, square theoretical RDM. 
+        The 'y' contains the full set of indices (0, 1, ..., n_trials-1).
         """
         if theoretical_rdm is None:
             raise ValueError("A theoretical_rdm must be provided to the fit method.")
@@ -190,19 +190,23 @@ class RSASearchlightEstimator(BaseEstimator):
 
     def score(self, X, y, **kwargs):
         """
-        Calculate the RSA score (Spearman correlation) for a single sphere.
-        'X' is the neural data for the sphere (n_trials x n_voxels).
+        'X' is the neural data for the sphere (n_trials_in_fold x n_voxels).
+        'y' contains the ORIGINAL indices of the trials in this fold.
         """
         try:
-            # The distance should be computed between trials (rows), not voxels (columns)
+            # 1. Create neural RDM for the current fold's data
             neural_rdm_flat = pdist(X, metric='correlation')
-        except ValueError:
-            # Handle spheres with zero variance
-            return 0.0
 
-        # Correlate the neural RDM vector with the theoretical RDM vector
-        correlation, _ = spearmanr(neural_rdm_flat, self.theoretical_rdm_)
-        
+            # 2. Subset the full theoretical RDM to match this fold
+            # Use np.ix_ to select the correct rows and columns from the square RDM
+            fold_rdm_square = self.theoretical_rdm_[np.ix_(y, y)]
+            fold_rdm_flat = squareform(fold_rdm_square, checks=False)
+
+            # 3. Correlate the two vectorized RDMs
+            correlation, _ = spearmanr(neural_rdm_flat, fold_rdm_flat)
+        except ValueError:
+            return 0.0 # Handle spheres with zero variance
+
         return correlation if not np.isnan(correlation) else 0.0
 
     def get_params(self, deep=True):
@@ -219,7 +223,6 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
         n_splits = n_groups
     
     cv = GroupKFold(n_splits=n_splits)
-    
     estimator = RSASearchlightEstimator()
     
     searchlight = SearchLight(
@@ -231,15 +234,13 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
         verbose=1
     )
     
-    # The theoretical RDM must be vectorized to match the neural RDM from pdist
-    vectorized_rdm = squareform(theoretical_rdm, checks=False)
-    
     # We pass a dummy 'y' variable for scikit-learn compatibility.
-    # The actual vectorized theoretical RDM is passed as a fit_param to the estimator.
+    # The actual SQUARE theoretical RDM is passed as a fit_param to the estimator.
     n_trials = beta_maps_img.shape[-1]
-    dummy_y = np.arange(n_trials)
+    dummy_y = np.arange(n_trials) # These are the indices that will be passed to score()
     
-    searchlight.fit(beta_maps_img, dummy_y, groups=groups, theoretical_rdm=vectorized_rdm)
+    # The SearchLight passes extra parameters to the estimator's fit method
+    searchlight.fit(beta_maps_img, dummy_y, groups=groups, theoretical_rdm=theoretical_rdm)
     
     scores_1d = searchlight.scores_
     
