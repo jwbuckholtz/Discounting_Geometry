@@ -60,29 +60,27 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     # Preserve original values for informative error messages
     data['choice_original'] = data['choice']
 
-    # Normalize numeric and string representations first
-    # This correctly handles '1.0', 1.0, '1', and 1
-    processed_choice = pd.to_numeric(data['choice'], errors='coerce')
-
-    # For remaining non-numeric types, map string labels
-    # This will not affect already numeric columns
-    if processed_choice.isnull().any():
+    # First, try a direct numeric conversion to handle ints, floats, and numeric strings like '1.0'
+    processed_choice = pd.to_numeric(data['choice_original'], errors='coerce')
+    
+    # For values that are not numeric, try to map known string labels
+    # This targets the rows that failed numeric conversion
+    unmapped_idx = processed_choice.isnull()
+    if unmapped_idx.any():
         choice_map = {'larger_later': 1, 'smaller_sooner': 0}
-        # Use the original choice column for mapping
-        string_mapped = data['choice_original'].str.strip().str.lower().map(choice_map)
-        # Fill in NaNs from the numeric conversion with the string-mapped values
-        processed_choice = processed_choice.fillna(string_mapped)
+        mapped_strings = data.loc[unmapped_idx, 'choice_original'].str.strip().str.lower().map(choice_map)
+        processed_choice.loc[unmapped_idx] = mapped_strings
 
-    # Check for any values that are still not mapped
+    # Check for any values that are still unmapped
     if processed_choice.isnull().any():
-        unmapped = data[processed_choice.isnull()]['choice_original'].unique()
-        raise ValueError(f"Unrecognized choice values detected: {list(unmapped)}")
+        unmapped_values = data[processed_choice.isnull()]['choice_original'].unique()
+        raise ValueError(f"Unrecognized choice values found: {list(unmapped_values)}")
 
     data['choice'] = processed_choice
     
     # Final validation: ensure the column contains only 0s and 1s
-    if not data['choice'].dropna().isin([0, 1]).all():
-        raise ValueError("Choice column contains values other than 0 or 1.")
+    if not data['choice'].isin([0, 1]).all():
+        raise ValueError("Choice column contains values other than 0 or 1 after processing.")
         
     return data.drop(columns=['choice_original'])
 
@@ -108,35 +106,38 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
 
     # --- Data Preparation and Validation ---
     
+    # Work on a copy to prevent modifying the original DataFrame passed to the function
+    fit_data = data.copy()
+    
     # 1. Validate that all required columns are present
     required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
-    missing_cols = [col for col in required_cols if col not in data.columns]
+    missing_cols = [col for col in required_cols if col not in fit_data.columns]
     if missing_cols:
         raise ValueError(f"Missing required behavioral columns: {', '.join(missing_cols)}")
 
     # 2. Validate and standardize the 'choice' column before dropping NaNs
     try:
-        data = _validate_and_prepare_choice_data(data)
+        fit_data = _validate_and_prepare_choice_data(fit_data)
     except (ValueError, TypeError) as e:
-        logging.error(f"Error processing 'choice' column: {e}")
+        logging.error(f"Error processing 'choice' column for subject: {e}")
         return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
 
     # 3. Drop rows with missing data in critical columns
-    initial_rows = len(data)
-    data.dropna(subset=required_cols, inplace=True)
-    if len(data) < initial_rows:
-        logging.info(f"Dropped {initial_rows - len(data)} rows with missing data.")
+    initial_rows = len(fit_data)
+    fit_data.dropna(subset=required_cols, inplace=True)
+    if len(fit_data) < initial_rows:
+        logging.info(f"Dropped {initial_rows - len(fit_data)} rows with missing data.")
         
     # Abort if no valid trials remain after cleaning
-    if data.empty:
+    if fit_data.empty:
         logging.warning("No valid trials remaining after removing rows with missing data. Aborting model fit.")
         return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
         
     # 4. Prepare numpy arrays for fitting
-    S = data['small_amount'].values
-    L = data['large_amount'].values
-    D = data['later_delay'].values
-    choices = data['choice'].values # Already 0/1 integer
+    S = fit_data['small_amount'].values
+    L = fit_data['large_amount'].values
+    D = fit_data['later_delay'].values
+    choices = fit_data['choice'].astype(int).values # Ensure integer type
     # --- End of Data Preparation ---
 
     # Parameters from config
@@ -204,19 +205,34 @@ def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
 
     return data
 
+def _parse_bids_filename(filename: Path) -> Dict[str, str]:
+    """A simple BIDS filename parser to extract key entities."""
+    entities = {}
+    parts = filename.stem.split('_')
+    for part in parts:
+        if '-' in part:
+            key, value = part.split('-', 1)
+            entities[key] = value
+    return entities
+
 def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Path, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Use a BIDS-compliant glob to find all event files for the task.
-    # Then, filter by the exact subject ID to prevent partial matches (e.g., sub-01 vs sub-010).
-    all_task_files = onsets_dir.glob('*_task-discountFix*_events.tsv')
-    subject_prefix = f"{subject_id}_"
-    event_files = sorted([f for f in all_task_files if f.name.startswith(subject_prefix)])
+    # Find all event files and parse them to ensure we only process the correct ones.
+    all_event_files = onsets_dir.glob('*_events.tsv')
+    event_files = []
+    subject_label = subject_id.split('-')[-1]
+
+    for f in all_event_files:
+        entities = _parse_bids_filename(f)
+        if entities.get('sub') == subject_label and entities.get('task') == 'discountFix':
+            event_files.append(f)
+    event_files.sort()
     
     if not event_files:
-        logging.warning(f"No event files found for {subject_id}")
+        logging.warning(f"No valid BIDS event files found for {subject_id} and task 'discountFix'")
         return None
         
     # Load and concatenate data, ensuring unique run IDs
@@ -224,18 +240,24 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     
     # First, parse files with explicit run numbers to reserve those IDs
     explicit_runs = {}  # path -> run_id
+    run_ids = []
     unnumbered_files = []
     for f in event_files:
         if '_run-' in f.name:
             try:
                 run_part = f.stem.split('_run-')[1]
                 run_id = int(run_part.split('_')[0])
+                run_ids.append(run_id)
                 explicit_runs[f] = run_id
             except (ValueError, IndexError):
                 logging.warning(f"Could not parse run number from '{f.name}'; will assign a unique ID.")
                 unnumbered_files.append(f)
         else:
             unnumbered_files.append(f)
+
+    # Check for duplicate run numbers *after* parsing all of them
+    if len(run_ids) != len(set(run_ids)):
+        raise ValueError(f"Duplicate run numbers detected for {subject_id}. Please check filenames.")
 
     # Process explicitly numbered files
     for f, run_id in explicit_runs.items():
@@ -274,7 +296,7 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
         
     k = fit_results['k']
 
-    # Calculate subjective values
+    # Calculate subjective values, now safe from upstream failures
     data_with_sv = calculate_subjective_values(data, k)
 
     # Save the combined, trial-by-trial results
