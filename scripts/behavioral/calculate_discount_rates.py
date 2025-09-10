@@ -180,6 +180,17 @@ def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The input DataFrame with added columns for subjective values.
     """
+    # Check for required columns first
+    required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
+    missing_cols = [col for col in required_cols if col not in data.columns]
+    if missing_cols:
+        logging.warning(f"Cannot compute subjective values: missing columns {missing_cols}")
+        data['SVchosen'] = np.nan
+        data['SVunchosen'] = np.nan
+        data['SVsum'] = np.nan
+        data['SVdiff'] = np.nan
+        return data
+
     if k is None or np.isnan(k):
         # If k could not be estimated, fill SV columns with NaNs
         data['SVchosen'] = np.nan
@@ -188,12 +199,25 @@ def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
         data['SVdiff'] = np.nan
         return data
 
+    # Ensure choice column is properly sanitized (should be 0/1 numeric)
+    # If it's not already clean, we need to clean it
+    if not pd.api.types.is_numeric_dtype(data['choice']) or not data['choice'].dropna().isin([0, 1]).all():
+        try:
+            data = _validate_and_prepare_choice_data(data)
+        except (ValueError, TypeError) as e:
+            logging.error(f"Cannot compute SV: choice column validation failed: {e}")
+            data['SVchosen'] = np.nan
+            data['SVunchosen'] = np.nan
+            data['SVsum'] = np.nan
+            data['SVdiff'] = np.nan
+            return data
+
     # Calculate the subjective value of each option
     sv_sooner = hyperbolic_discount(0, data['small_amount'], k)
     sv_later = hyperbolic_discount(data['later_delay'], data['large_amount'], k)
 
     # Determine chosen and unchosen SV based on the 'choice' column
-    # This now works directly with the standardized 0/1 choice column
+    # Now we know choice is properly sanitized to 0/1
     is_later_chosen = data['choice'].astype(bool)
     
     data['SVchosen'] = np.where(is_later_chosen, sv_later, sv_sooner)
@@ -220,16 +244,26 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Find all event files and parse them to ensure we only process the correct ones.
-    all_event_files = onsets_dir.glob('*_events.tsv')
-    event_files = []
+    # Use a more targeted BIDS-compliant search for discount-fix events
     subject_label = subject_id.split('-')[-1]
-
-    for f in all_event_files:
+    event_files = []
+    
+    # Search specifically for discount-fix task files
+    for pattern in [f'sub-{subject_label}_*task-discountFix*_events.tsv', 
+                   f'sub-{subject_label}_task-discountFix*_events.tsv']:
+        event_files.extend(onsets_dir.glob(pattern))
+    
+    # Remove duplicates and sort
+    event_files = sorted(list(set(event_files)))
+    
+    # Double-check with BIDS parsing to ensure exact match
+    validated_files = []
+    for f in event_files:
         entities = _parse_bids_filename(f)
         if entities.get('sub') == subject_label and entities.get('task') == 'discountFix':
-            event_files.append(f)
-    event_files.sort()
+            validated_files.append(f)
+    
+    event_files = validated_files
     
     if not event_files:
         logging.warning(f"No valid BIDS event files found for {subject_id} and task 'discountFix'")
@@ -282,8 +316,22 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     data = pd.concat(all_runs_data, ignore_index=True)
 
     # Fit the discount rate and temperature using data from all runs
+    # This returns cleaned data that we should use for SV calculation and output
     try:
-        fit_results = fit_discount_rate(data, params)
+        fit_results = fit_discount_rate(data.copy(), params)
+        
+        # Get the cleaned data by running the same cleaning steps
+        cleaned_data = data.copy()
+        required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
+        
+        # Apply the same cleaning steps as fit_discount_rate
+        try:
+            cleaned_data = _validate_and_prepare_choice_data(cleaned_data)
+            cleaned_data.dropna(subset=required_cols, inplace=True)
+        except (ValueError, TypeError) as e:
+            logging.error(f"Data cleaning failed for {subject_id}: {e}")
+            cleaned_data = data.copy()  # Fall back to original if cleaning fails
+            
     except ValueError as e:
         logging.error(f"Could not fit model for {subject_id}: {e}")
         # Create a result dict with NaNs to indicate failure for this subject
@@ -293,19 +341,20 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
             'neg_log_likelihood': np.nan, 
             'pseudo_r2': np.nan
         }
+        cleaned_data = data.copy()  # Use original data if fit completely failed
         
     k = fit_results['k']
 
-    # Calculate subjective values, now safe from upstream failures
-    data_with_sv = calculate_subjective_values(data, k)
+    # Calculate subjective values on the cleaned data
+    data_with_sv = calculate_subjective_values(cleaned_data, k)
 
-    # Save the combined, trial-by-trial results
+    # Save the cleaned, trial-by-trial results (not the original dirty data)
     output_dir = derivatives_dir / 'behavioral' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f'{subject_id}_discounting_with_sv.tsv'
     data_with_sv.to_csv(output_path, sep='\t', index=False)
     
-    logging.info(f"Processed and saved combined data for {subject_id} from {len(event_files)} run(s)")
+    logging.info(f"Processed and saved cleaned data for {subject_id} from {len(event_files)} run(s)")
     
     # Return the summary results for aggregation
     return { 'subject_id': subject_id, **fit_results }
