@@ -57,21 +57,34 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     if 'choice' not in data.columns:
         raise ValueError("The required column 'choice' was not found in the data.")
 
-    # Convert to string to handle categorical/object dtypes robustly
-    choice_col = data['choice'].astype(str).str.strip().str.lower()
+    # Preserve original values for informative error messages
+    data['choice_original'] = data['choice']
 
-    # Map string labels and numeric strings to 0/1
-    choice_map = {'larger_later': 1, 'smaller_sooner': 0, '1': 1, '0': 0}
-    data['choice'] = choice_col.map(choice_map)
+    # Normalize numeric and string representations first
+    # This correctly handles '1.0', 1.0, '1', and 1
+    processed_choice = pd.to_numeric(data['choice'], errors='coerce')
+
+    # For remaining non-numeric types, map string labels
+    # This will not affect already numeric columns
+    if processed_choice.isnull().any():
+        choice_map = {'larger_later': 1, 'smaller_sooner': 0}
+        # Use the original choice column for mapping
+        string_mapped = data['choice_original'].str.strip().str.lower().map(choice_map)
+        # Fill in NaNs from the numeric conversion with the string-mapped values
+        processed_choice = processed_choice.fillna(string_mapped)
+
+    # Check for any values that are still not mapped
+    if processed_choice.isnull().any():
+        unmapped = data[processed_choice.isnull()]['choice_original'].unique()
+        raise ValueError(f"Unrecognized choice values detected: {list(unmapped)}")
+
+    data['choice'] = processed_choice
     
-    # Convert to numeric, coercing any non-mapped values to NaN
-    data['choice'] = pd.to_numeric(data['choice'], errors='coerce')
-
-    # Final validation: ensure the column contains only 0s and 1s (after dropping NaNs)
+    # Final validation: ensure the column contains only 0s and 1s
     if not data['choice'].dropna().isin([0, 1]).all():
-        raise ValueError("Choice column contains values other than 0, 1, or recognized strings.")
+        raise ValueError("Choice column contains values other than 0 or 1.")
         
-    return data
+    return data.drop(columns=['choice_original'])
 
 def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
     """
@@ -196,12 +209,11 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # A robust method to find BIDS-compliant event files for the exact subject and task.
-    # This avoids both subject-mixing (e.g., sub-01 vs sub-010) and overly restrictive patterns.
+    # Use a BIDS-compliant glob to find all event files for the task.
+    # Then, filter by the exact subject ID to prevent partial matches (e.g., sub-01 vs sub-010).
     all_task_files = onsets_dir.glob('*_task-discountFix*_events.tsv')
-    event_files = sorted([
-        f for f in all_task_files if f.name.startswith(f'{subject_id}_')
-    ])
+    subject_prefix = f"{subject_id}_"
+    event_files = sorted([f for f in all_task_files if f.name.startswith(subject_prefix)])
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
