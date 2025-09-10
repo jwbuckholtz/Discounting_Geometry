@@ -18,17 +18,31 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
+    run_files = subject_data['run_files']
     
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
     
-    # Standardize confound columns across all runs for this subject
+    # --- Data Pruning ---
+    runs_with_events = events_df['run'].unique()
+    valid_run_indices = [i for i, run in enumerate(run_files) if int(run['run_id']) in runs_with_events]
+    
+    if len(valid_run_indices) < len(run_files):
+        logging.warning(f"Pruning {len(run_files) - len(valid_run_indices)} run(s) with no matching events.")
+    
+    bold_imgs = [bold_imgs[i] for i in valid_run_indices]
+    confounds_dfs = [confounds_dfs[i] for i in valid_run_indices] if confounds_dfs else None
+
+    if not bold_imgs:
+        logging.error("No valid runs with event data found. Aborting.")
+        return
+
+    # Standardize confound columns across all valid runs for this subject
     if confounds_dfs:
         all_confound_columns = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
         cleaned_confounds_dfs = [df.reindex(columns=all_confound_columns, fill_value=0) for df in confounds_dfs]
-        logging.info(f"Standardized confounds to {len(all_confound_columns)} common columns across {len(confounds_dfs)} runs.")
     else:
-        cleaned_confounds_dfs = []
-    
+        cleaned_confounds_dfs = None # Use None if no confounds exist
+
     # --- Onset Normalization ---
     corrected_events_list = []
     for run_number in sorted(events_df['run'].unique()):
@@ -43,21 +57,6 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         return
 
     events_df = pd.concat(corrected_events_list, ignore_index=True)
-
-    # --- Data Pruning ---
-    # Find runs with events and keep only the corresponding data
-    runs_with_events = events_df['run'].unique()
-    valid_run_indices = [i for i, run in enumerate(bold_imgs) if run['run_id'] in runs_with_events]
-    
-    if len(valid_run_indices) < len(bold_imgs):
-        logging.warning(f"Pruning {len(bold_imgs) - len(valid_run_indices)} run(s) with no matching events.")
-    
-    bold_imgs = [bold_imgs[i] for i in valid_run_indices]
-    confounds_dfs = [confounds_dfs[i] for i in valid_run_indices]
-
-    if not bold_imgs:
-        logging.error("No valid runs with event data found. Aborting.")
-        return
 
     # --- GLM Specification ---
     analysis_params = params['analysis_params']
@@ -76,9 +75,10 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         run_number: events_df[events_df['run'] == run_number].copy()
         for run_number in sorted(events_df['run'].unique())
     }
-    # Set the initial trial_type for all events
     for df in events_per_run.values():
         df['trial_type'] = 'nuisance'
+        # CRITICAL FIX: Keep only essential columns for the nuisance model
+        df = df[['onset', 'duration', 'trial_type']]
 
     # Convert to a list of dataframes in the correct order for nilearn
     initial_events_list = [events_per_run[run] for run in sorted(events_per_run.keys())]

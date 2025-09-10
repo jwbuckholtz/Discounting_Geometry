@@ -176,11 +176,12 @@ def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str)
 
     return {
         "subject_id": subject_id,
-        "bold_imgs": bold_imgs, # Pass as a list of paths
-        "run_numbers": run_numbers, # Pass the actual run numbers
+        "run_files": run_files, # Return the full run info
+        "bold_imgs": bold_imgs,
+        "run_numbers": run_numbers,
         "mask_file": mask_file,
         "events_df": events_df,
-        "confounds_dfs": confounds_dfs, # Pass as a list of dataframes
+        "confounds_dfs": confounds_dfs,
         "groups": groups,
         "derivatives_dir": derivatives_dir
     }
