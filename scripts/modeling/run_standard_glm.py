@@ -1,13 +1,50 @@
 import argparse
-from pathlib import Path
 import pandas as pd
 import numpy as np
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
-from nilearn import image
-from functools import reduce
+
+def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame]:
+    """
+    Harmonizes confound DataFrames to have identical column sets and orders.
+    This prevents design matrix misalignment across runs.
+    
+    Args:
+        confounds_dfs: List of confound DataFrames, one per run
+        
+    Returns:
+        List of harmonized confound DataFrames with consistent columns
+    """
+    if not confounds_dfs:
+        return confounds_dfs
+        
+    # Find the union of all columns across runs
+    all_columns = set()
+    for df in confounds_dfs:
+        all_columns.update(df.columns)
+    
+    # Sort columns for consistent ordering
+    unified_columns = sorted(all_columns)
+    
+    # Harmonize each DataFrame
+    harmonized_dfs = []
+    for i, df in enumerate(confounds_dfs):
+        harmonized_df = df.copy()
+        
+        # Add missing columns with zeros
+        for col in unified_columns:
+            if col not in harmonized_df.columns:
+                harmonized_df[col] = 0.0
+                logging.info(f"Added missing confound column '{col}' to run {i+1} (filled with zeros)")
+        
+        # Reorder columns to match unified order
+        harmonized_df = harmonized_df[unified_columns]
+        harmonized_dfs.append(harmonized_df)
+    
+    logging.info(f"Harmonized {len(confounds_dfs)} confound DataFrames with {len(unified_columns)} columns: {unified_columns}")
+    return harmonized_dfs
 
 def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols: list, run_numbers: list) -> list:
     """
@@ -149,13 +186,26 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             logging.warning(f"Skipping run {run_number} - no events found")
             continue
             
-        # Check if onsets need normalization (only if not already run-relative)
+        # More sophisticated onset normalization logic
         first_onset = run_events_df['onset'].min()
-        if first_onset > 10:  # Heuristic: if first onset > 10s, likely session-relative
-            logging.info(f"Normalizing onsets for run {run_number} (first onset: {first_onset:.2f}s)")
+        last_onset = run_events_df['onset'].max()
+        onset_range = last_onset - first_onset
+        
+        # Only normalize if:
+        # 1. First onset is substantially > 0 (suggesting session-relative timing)
+        # 2. The range of onsets is reasonable (not a single event at a late time)
+        # 3. First onset is not just a short baseline (< 30s suggests intentional baseline)
+        should_normalize = (
+            first_onset > 30 and  # More conservative threshold
+            onset_range > 10 and  # Ensure multiple events over time
+            first_onset < 600     # Sanity check: < 10 minutes
+        )
+        
+        if should_normalize:
+            logging.info(f"Normalizing onsets for run {run_number} (range: {first_onset:.1f}s - {last_onset:.1f}s)")
             run_events_df['onset'] -= first_onset
         else:
-            logging.info(f"Onsets appear already run-relative for run {run_number} (first onset: {first_onset:.2f}s)")
+            logging.info(f"Preserving original onsets for run {run_number} (range: {first_onset:.1f}s - {last_onset:.1f}s)")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
@@ -168,27 +218,44 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         raise ValueError(f"No valid runs with events found for subject {subject_id}")
         
     logging.info(f"Processing {len(events_per_run)} valid runs (skipped {len(run_numbers) - len(events_per_run)} empty runs)")
+    
+    # --- Harmonize Confounds ---
+    harmonized_confounds = _harmonize_confounds(valid_confounds_dfs)
             
     # --- Fit the GLM ---
-    glm.fit(valid_bold_imgs, events=events_per_run, confounds=valid_confounds_dfs)
+    glm.fit(valid_bold_imgs, events=events_per_run, confounds=harmonized_confounds)
     
-    # --- Verify Design Matrix Consistency ---
+    # --- Enforce Design Matrix Consistency ---
     if len(glm.design_matrices_) > 1:
         # Check that all design matrices have the same columns
         first_columns = set(glm.design_matrices_[0].columns)
+        inconsistent_runs = []
+        
         for i, design_matrix in enumerate(glm.design_matrices_[1:], 1):
             current_columns = set(design_matrix.columns)
             if current_columns != first_columns:
                 missing = first_columns - current_columns
                 extra = current_columns - first_columns
-                logging.warning(f"Design matrix inconsistency in run {valid_run_numbers[i]}:")
-                if missing:
-                    logging.warning(f"  Missing columns: {missing}")
-                if extra:
-                    logging.warning(f"  Extra columns: {extra}")
+                inconsistent_runs.append({
+                    'run': valid_run_numbers[i],
+                    'missing': missing,
+                    'extra': extra
+                })
+        
+        # Enforce consistency - raise error if matrices differ
+        if inconsistent_runs:
+            error_msg = f"Design matrix inconsistencies detected for {subject_id}:\n"
+            for issue in inconsistent_runs:
+                error_msg += f"  Run {issue['run']}: missing={issue['missing']}, extra={issue['extra']}\n"
+            error_msg += "This indicates problems with confound harmonization or event processing."
+            raise ValueError(error_msg)
                     
         # Log the final design matrix structure
-        logging.info(f"Design matrices have {len(first_columns)} columns: {sorted(first_columns)}")
+        logging.info(f"Design matrices consistent across {len(glm.design_matrices_)} runs with {len(first_columns)} columns: {sorted(first_columns)}")
+    else:
+        # Single run case
+        columns = set(glm.design_matrices_[0].columns)
+        logging.info(f"Single run design matrix has {len(columns)} columns: {sorted(columns)}")
 
     # --- Define and Compute Contrasts ---
     # Check for contrasts across ALL design matrices, not just the first one
