@@ -48,6 +48,30 @@ def choice_probability(params: Tuple[float, float], S: np.ndarray, L: np.ndarray
     prob_later = 1 / (1 + np.exp(exponent))
     return prob_later
 
+def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Validates that the choice column exists and converts it to a 0/1 integer format.
+    - Handles string labels ('larger_later', 'smaller_sooner') and numeric codes.
+    - Raises ValueError if the column is missing or contains unexpected values.
+    """
+    if 'choice' not in data.columns:
+        raise ValueError("The required column 'choice' was not found in the data.")
+
+    # Standardize the 'choice' column to integer (1 for larger_later, 0 for smaller_sooner)
+    if pd.api.types.is_string_dtype(data['choice']):
+        # Create a boolean series and convert to int
+        is_larger_later = data['choice'].str.lower() == 'larger_later'
+        data['choice'] = is_larger_later.astype(int)
+    elif pd.api.types.is_numeric_dtype(data['choice']):
+        # Assuming 1 already means larger_later, ensure it's just 0s and 1s
+        if not data['choice'].isin([0, 1]).all():
+            raise ValueError("Numeric 'choice' column contains values other than 0 and 1.")
+        data['choice'] = data['choice'].astype(int)
+    else:
+        raise TypeError(f"Unsupported data type for 'choice' column: {data['choice'].dtype}")
+        
+    return data
+
 def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
     """
     Fits the hyperbolic discounting model to behavioral data to estimate k and tau.
@@ -68,11 +92,28 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
         log_likelihood = np.sum(choices * np.log(probs) + (1 - choices) * np.log(1 - probs))
         return -log_likelihood
 
-    # Prepare the data for fitting
+    # --- Data Preparation and Validation ---
+    
+    # 1. Validate that all required columns are present
+    required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
+    missing_cols = [col for col in required_cols if col not in data.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required behavioral columns: {', '.join(missing_cols)}")
+
+    # 2. Validate and standardize the 'choice' column
+    try:
+        data = _validate_and_prepare_choice_data(data)
+    except (ValueError, TypeError) as e:
+        logging.error(f"Error processing 'choice' column: {e}")
+        # Return NaNs as the fit cannot proceed
+        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
+        
+    # 3. Prepare numpy arrays for fitting
     S = data['small_amount'].values
     L = data['large_amount'].values
     D = data['later_delay'].values
-    choices = (data['choice'] == 'larger_later').astype(int).values
+    choices = data['choice'].values # Already 0/1 integer
+    # --- End of Data Preparation ---
 
     # Parameters from config
     initial_params = params['initial_params']
@@ -127,7 +168,8 @@ def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
     sv_later = hyperbolic_discount(data['later_delay'], data['large_amount'], k)
 
     # Determine chosen and unchosen SV based on the 'choice' column
-    is_later_chosen = (data['choice'] == 'larger_later')
+    # This now works directly with the standardized 0/1 choice column
+    is_later_chosen = data['choice'].astype(bool)
     
     data['SVchosen'] = np.where(is_later_chosen, sv_later, sv_sooner)
     data['SVunchosen'] = np.where(is_later_chosen, sv_sooner, sv_later)
@@ -142,10 +184,9 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     """
     Processes all behavioral data for a single subject, handling multiple runs.
     """
-    onset_subject_id = subject_id.replace('sub-', '')
     
-    # Find all event files for this subject, which may be split by run
-    event_files = sorted(list(onsets_dir.glob(f'{onset_subject_id}*discountFix_events.tsv')))
+    # Restrict the event file search to the exact subject ID to prevent mixing subjects
+    event_files = sorted(list(onsets_dir.glob(f'{subject_id}*discountFix_events.tsv')))
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
