@@ -8,6 +8,7 @@ from scripts.utils import load_concatenated_subject_data, load_config, setup_log
 from typing import Dict, Any
 import logging
 from nilearn import image
+from functools import reduce
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
@@ -34,7 +35,16 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     if 'choice' in events_df.columns:
         events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
 
-    # --- GLM Setup ---
+    # --- Data Loading ---
+    bold_imgs, confounds_dfs, events_df = subject_data['bold'], subject_data['confounds'], subject_data['events']
+    
+    # CRITICAL FIX: Standardize confound columns across all runs for this subject
+    if confounds_dfs:
+        common_confounds = list(reduce(set.intersection, [set(df.columns) for df in confounds_dfs]))
+        confounds_dfs = [df[common_confounds] for df in confounds_dfs]
+        logging.info(f"Standardized confounds to {len(common_confounds)} common columns across {len(confounds_dfs)} runs.")
+
+    # --- Model Specification ---
     glm = FirstLevelModel(
         t_r=params['t_r'],
         slice_time_ref=params['slice_time_ref'],
@@ -103,33 +113,37 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     glm.fit(final_bold_imgs, events=events_per_run, confounds=cleaned_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    # Inspect the design matrix to get the order of regressors
-    design_matrix = glm.design_matrices_[0] # Use the first (and only) design matrix
+    # This logic now correctly handles multi-run models by averaging across runs.
+    design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)
     
-    # Create a dict for all possible contrasts based on the config.
-    # We will always create a contrast for the main effect ('mean')
-    # and one for each specified parametric modulator.
-    contrasts_to_compute = ['mean'] + params['glm']['parametric_modulators']
+    contrasts_to_compute = ['mean'] + params['analysis_params']['glm']['parametric_modulators']
     
     for contrast_name in contrasts_to_compute:
-        # The base regressor for all trials is simply 'mean'
-        base_regressor = 'mean'
-        
-        # For parametric modulators, Nilearn creates a new column name like 'meanxSVchosen'
-        if contrast_name != base_regressor:
-            # Find the actual column name in the design matrix
-            expected_col_name = f"{base_regressor}x{contrast_name}"
-            if expected_col_name in design_matrix.columns:
-                contrast_vector = make_contrast_vector(design_matrix.columns, {expected_col_name: 1})
-            else:
-                logging.warning(f"Could not find column for parametric modulator '{contrast_name}' (expected '{expected_col_name}'). Skipping contrast.")
-                continue
+        # Identify all columns in the design matrix related to this contrast
+        if contrast_name == 'mean':
+            # Main effect columns don't have parametric modulators
+            contrast_cols = [col for col in design_matrix.columns if col.startswith('mean') and 'x' not in col]
         else:
-            # For the main effect, the column is just the base regressor name
-            contrast_vector = make_contrast_vector(design_matrix.columns, {base_regressor: 1})
+            # Parametric modulator columns
+            contrast_cols = [col for col in design_matrix.columns if col.startswith(f'meanx{contrast_name}')]
 
+        # Skip contrast if no corresponding columns were found in the model
+        if not contrast_cols:
+            logging.warning(f"Contrast '{contrast_name}' not found in any design matrix. Skipping.")
+            continue
+            
+        # CRITICAL FIX: Skip contrast if the regressor(s) had zero variance (e.g., all zeros)
+        if design_matrix[contrast_cols].std().sum() == 0:
+            logging.warning(f"Regressor(s) for contrast '{contrast_name}' have zero variance. Skipping contrast.")
+            continue
+
+        # Build the contrast vector, averaging across runs
+        contrast_vector = np.zeros(design_matrix.shape[1])
+        for col in contrast_cols:
+            contrast_vector[design_matrix.columns.get_loc(col)] = 1.0 / len(contrast_cols)
+        
         # --- Compute and Save Contrast ---
-        logging.info(f"  - Computing contrast for '{contrast_name}'...")
+        logging.info(f"  - Computing contrast for '{contrast_name}' (averaging over {len(contrast_cols)} run(s))...")
         z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
         
         # Save the z-map

@@ -7,6 +7,7 @@ from scripts.utils import load_concatenated_subject_data, load_config, setup_log
 from typing import Dict, Any
 import logging
 import numpy as np
+from functools import reduce
 
 def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
@@ -50,7 +51,18 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         else:
             cleaned_confounds_dfs.append(conf_df)
 
-    # Define the GLM using parameters from the config file
+    # --- Data Loading ---
+    bold_imgs, confounds_dfs, events_df = subject_data['bold'], subject_data['confounds'], subject_data['events']
+    
+    # CRITICAL FIX: Standardize confound columns across all runs for this subject
+    if confounds_dfs:
+        common_confounds = list(reduce(set.intersection, [set(df.columns) for df in confounds_dfs]))
+        cleaned_confounds_dfs = [df[common_confounds].fillna(0) for df in confounds_dfs]
+        logging.info(f"Standardized confounds to {len(common_confounds)} common columns across {len(confounds_dfs)} runs.")
+    else:
+        cleaned_confounds_dfs = []
+
+    # --- GLM Specification ---
     glm = FirstLevelModel(
         t_r=params['t_r'],
         slice_time_ref=params['slice_time_ref'],

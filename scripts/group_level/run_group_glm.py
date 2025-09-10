@@ -37,17 +37,15 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
     subject_dirs = [d for d in glm_output_dir.iterdir() if d.is_dir() and d.name.startswith('sub-')]
     
     first_level_maps = []
-    subject_map_paths = [] # To store paths for the design matrix
-    for subject_id in subject_dirs:
-        subject_dir = glm_output_dir / subject_id
-        # Corrected glob pattern: Does not include the extra 'z_maps' directory
-        contrast_file = subject_dir / f"contrast-{contrast}_zmap.nii.gz"
-        
-        if contrast_file.exists():
-            first_level_maps.append(str(contrast_file))
-            subject_map_paths.append(str(contrast_file)) # For the design matrix
+    subject_ids_found = [] # To store the subject IDs for the design matrix index
+    for subject_dir in subject_dirs:
+        subject_id = subject_dir.name
+        contrast_map_path = subject_dir / f"contrast-{contrast}_zmap.nii.gz"
+        if contrast_map_path.exists():
+            first_level_maps.append(str(contrast_map_path))
+            subject_ids_found.append(subject_id)
         else:
-            logging.warning(f"Contrast file not found for {subject_id} at {contrast_file}. Skipping.")
+            logging.warning(f"Could not find contrast map for {subject_id}. Skipping.")
     
     if len(first_level_maps) < 2:
         logging.error(f"Fewer than 2 contrast maps found for '{contrast}'. Cannot run group-level analysis.")
@@ -55,12 +53,14 @@ def run_group_level_glm(config_path: str, env: str, contrast: str) -> None:
 
     logging.info(f"Found {len(first_level_maps)} first-level contrast maps to include in the analysis.")
 
-    # --- 3. Define and Fit the Second-Level Model ---
-    # The design matrix for a simple group-level t-test is just an intercept
-    design_matrix = pd.DataFrame([1] * len(first_level_maps), columns=['intercept'])
-    design_matrix.index = [Path(f).name for f in first_level_maps] # Add subject map names for clarity
+    # --- 2. Create the Second-Level Design Matrix ---
+    # We just need a simple intercept model to calculate the group mean.
+    design_matrix = pd.DataFrame(
+        {'intercept': np.ones(len(first_level_maps))},
+        index=subject_ids_found # Use the subject IDs as the index
+    )
     
-    # Save the design matrix for inspection
+    # Save the design matrix to a file for inspection
     dm_output_path = group_level_output_dir / f'group_{contrast}_design_matrix.csv'
     design_matrix.to_csv(dm_output_path)
     logging.info(f"Saved design matrix to: {dm_output_path}")
