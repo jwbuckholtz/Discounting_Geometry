@@ -185,8 +185,8 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Restrict the event file search to the exact subject ID to prevent mixing subjects
-    event_files = sorted(list(onsets_dir.glob(f'{subject_id}*discountFix_events.tsv')))
+    # BIDS-compliant glob pattern to ensure exact subject matching
+    event_files = sorted(list(onsets_dir.glob(f'{subject_id}_*_task-discountFix_events.tsv')))
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
