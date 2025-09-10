@@ -217,6 +217,7 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
     
     # Safeguard against asking for more splits than there are groups
     n_groups = len(np.unique(groups))
+    # CRITICAL FIX: Use the top-level cv_folds key
     n_splits = params['cv_folds']
     if n_splits > n_groups:
         logging.warning(f"Requested {n_splits} CV splits, but only {n_groups} groups are available. Setting n_splits to {n_groups}.")

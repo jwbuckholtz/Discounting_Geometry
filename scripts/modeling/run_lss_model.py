@@ -15,44 +15,11 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
-    mask_file = subject_data['mask_file']
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
-
-    logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
-
-    # --- CRITICAL FIX: Normalize onsets to be relative to the start of each run ---
-    # The onset times in the behavioral files are cumulative across the session.
-    # We must create a new events dataframe where onsets are relative to their run's start time.
-    corrected_events_list = []
-    for run_number in sorted(events_df['run'].unique()):
-        run_events_df = events_df[events_df['run'] == run_number].copy()
-        if not run_events_df.empty:
-            first_onset_in_run = run_events_df['onset'].min()
-            run_events_df['onset'] -= first_onset_in_run
-            logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
-            corrected_events_list.append(run_events_df)
     
-    if not corrected_events_list:
-        logging.error(f"No valid event data found for any run for subject {subject_id}. Aborting.")
-        return
-
-    events_df = pd.concat(corrected_events_list, ignore_index=True)
-
-    # --- Pre-computation Data Cleaning ---
-    # Fill any NaNs from the confounds files to prevent crashes.
-    # Use a list comprehension to create a new list of cleaned dataframes.
-    cleaned_confounds_dfs = []
-    for conf_df in confounds_dfs:
-        if conf_df.isnull().values.any():
-            logging.warning(f"NaNs found in confounds for {subject_id}. Filling with 0.")
-            cleaned_confounds_dfs.append(conf_df.fillna(0))
-        else:
-            cleaned_confounds_dfs.append(conf_df)
-
-    # --- Data Loading ---
-    bold_imgs, confounds_dfs, events_df = subject_data['bold'], subject_data['confounds'], subject_data['events']
+    logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
     
     # CRITICAL FIX: Standardize confound columns across all runs for this subject
     if confounds_dfs:
@@ -61,15 +28,31 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         logging.info(f"Standardized confounds to {len(common_confounds)} common columns across {len(confounds_dfs)} runs.")
     else:
         cleaned_confounds_dfs = []
+    
+    # --- Onset Normalization ---
+    corrected_events_list = []
+    for run_number in sorted(events_df['run'].unique()):
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+        if not run_events_df.empty:
+            first_onset_in_run = run_events_df['onset'].min()
+            run_events_df['onset'] -= first_onset_in_run
+            corrected_events_list.append(run_events_df)
+    
+    if not corrected_events_list:
+        logging.error(f"No valid event data found for any run for subject {subject_id}. Aborting.")
+        return
+
+    events_df = pd.concat(corrected_events_list, ignore_index=True)
 
     # --- GLM Specification ---
     glm = FirstLevelModel(
-        t_r=params['t_r'],
-        slice_time_ref=params['slice_time_ref'],
-        hrf_model='glover',
+        t_r=params['analysis_params']['t_r'],
+        slice_time_ref=params['analysis_params']['slice_time_ref'],
+        hrf_model=params['analysis_params']['glm']['hrf_model'],
         drift_model='cosine',
-        mask_img=mask_file,
+        mask_img=subject_data['mask_file'],
         signal_scaling=False,
+        n_jobs=-1
     )
 
     # --- Prepare a dictionary of per-run event dataframes (for nuisance regressors) ---

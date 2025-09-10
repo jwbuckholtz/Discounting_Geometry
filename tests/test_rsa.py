@@ -78,7 +78,7 @@ def synthetic_rsa_dataset(tmp_path_factory):
         },
         'analysis_params': {
             'rsa': {
-                'theoretical_models': ['choice', 'SVchosen'],
+                'models': ['choice', 'SVchosen'], # Correct key
                 'cv_folds': 4,
                 'searchlight_radius': 5
             }

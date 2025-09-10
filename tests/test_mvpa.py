@@ -84,16 +84,16 @@ def synthetic_dataset(tmp_path_factory):
     params = {
         'analysis_params': {
             'mvpa': {
-                'targets': ['trial_type', 'SVchosen'],
+                'targets': ['trial_type', 'SVchosen'], # Single, combined list
                 'classification': {
-                    'target_variables': ['trial_type'],
+                    'target_variables': ['trial_type'], # Still needed for type lookup
                     'estimator': 'SVC',
                     'scoring': 'accuracy',
                     'cv_folds': 2,
                     'random_state': 42
                 },
                 'regression': {
-                    'target_variables': ['SVchosen'],
+                    'target_variables': ['SVchosen'], # Still needed for type lookup
                     'estimator': 'SVR',
                     'scoring': 'r2',
                     'cv_folds': 2
