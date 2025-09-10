@@ -162,6 +162,7 @@ def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str)
     # 2. Load and concatenate BOLD images and confounds
     bold_imgs = [run['bold'] for run in run_files]
     confounds_dfs = [pd.read_csv(run['confounds'], sep='\t') for run in run_files]
+    run_numbers = [int(run['run_id']) for run in run_files] # Extract run numbers
 
     # 3. Load the run-aware behavioral file
     events_file = find_behavioral_sv_file(derivatives_dir, subject_id)
@@ -176,6 +177,7 @@ def load_concatenated_subject_data(config_path: Path, env: str, subject_id: str)
     return {
         "subject_id": subject_id,
         "bold_imgs": bold_imgs, # Pass as a list of paths
+        "run_numbers": run_numbers, # Pass the actual run numbers
         "mask_file": mask_file,
         "events_df": events_df,
         "confounds_dfs": confounds_dfs, # Pass as a list of dataframes

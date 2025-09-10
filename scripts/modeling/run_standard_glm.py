@@ -24,9 +24,8 @@ def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) ->
         if col not in run_events_df.columns:
             run_events_df[col] = 0
         
-        # Mean-center the modulator if it has variance
-        if run_events_df[col].std() > 1e-6: # Use a small epsilon for float comparison
-            run_events_df[col] -= run_events_df[col].mean()
+        # CRITICAL FIX: Always mean-center. Constant columns become all zeros.
+        run_events_df[col] -= run_events_df[col].mean()
     
     # Return only the columns Nilearn needs, in a consistent order
     nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
@@ -38,6 +37,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
+    run_numbers = subject_data['run_numbers'] # Get the actual run numbers
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
@@ -70,8 +70,8 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     final_confounds_dfs = []
     all_modulator_cols = analysis_params['glm']['parametric_modulators']
 
-    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
-        run_number = i + 1
+    # CRITICAL FIX: Iterate over actual run numbers, not sequential indices
+    for run_number, bold_img, confounds_df in zip(run_numbers, bold_imgs, confounds_dfs):
         run_events_df = events_df[events_df['run'] == run_number].copy()
 
         if run_events_df.empty:
@@ -82,13 +82,19 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         final_bold_imgs.append(bold_img)
         final_confounds_dfs.append(confounds_df)
         
+        # Normalize onsets
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
         
-        # Process events using the helper function
+        # Process events using the new helper function
         prepared_events = prepare_run_events(run_events_df, all_modulator_cols)
         events_per_run.append(prepared_events)
             
+    # CRITICAL FIX: Exit gracefully if all runs were pruned
+    if not final_bold_imgs:
+        logging.error(f"No runs with any valid event data found for subject {subject_id}. Aborting GLM.")
+        return
+
     # --- Fit the GLM ---
     glm.fit(final_bold_imgs, events=events_per_run, confounds=final_confounds_dfs)
 
