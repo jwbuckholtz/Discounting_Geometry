@@ -44,8 +44,9 @@ analysis_params:
   glm:
     hrf_model: 'glover'
     drift_model: 'cosine'
-    contrasts:
-      - decision
+    # List of parametric modulators to include in the model.
+    # The 'decision' contrast (main effect of all trials) is always included.
+    parametric_modulators:
       - choice
       - SVchosen
       - SVunchosen

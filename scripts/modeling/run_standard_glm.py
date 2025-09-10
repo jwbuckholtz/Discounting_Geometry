@@ -53,7 +53,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     final_bold_imgs = []
 
     # Define the full set of potential modulator columns based on the config
-    all_modulator_cols = [m for m in params['glm']['contrasts'] if m != 'decision']
+    all_modulator_cols = params['glm']['parametric_modulators']
 
     for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
         run_number = i + 1
@@ -104,39 +104,36 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
 
     # --- Define and Compute Contrasts ---
     # Inspect the design matrix to get the order of regressors
-    final_design_matrix_columns = glm.design_matrices_[-1].columns.tolist()
+    design_matrix = glm.design_matrices_[0] # Use the first (and only) design matrix
     
-    # Create a dict for all possible contrasts based on the config
-    contrasts = {}
-    for contrast_name in params['glm']['contrasts']:
+    # Create a dict for all possible contrasts based on the config.
+    # We will always create a contrast for the main effect ('decision')
+    # and one for each specified parametric modulator.
+    contrasts_to_compute = ['decision'] + params['glm']['parametric_modulators']
+    
+    for contrast_name in contrasts_to_compute:
         # The base regressor for all trials is simply 'decision'
         base_regressor = 'decision'
         
         # For parametric modulators, Nilearn creates a new column name like 'decisionxSVchosen'
         if contrast_name != base_regressor:
             # Find the actual column name in the design matrix
-            # It will be the base regressor name, an 'x', and the contrast name
             expected_col_name = f"{base_regressor}x{contrast_name}"
-            if expected_col_name in final_design_matrix_columns:
-                contrast_def = final_design_matrix_columns.index(expected_col_name)
+            if expected_col_name in design_matrix.columns:
+                contrast_vector = make_contrast_vector(design_matrix.columns, {expected_col_name: 1})
             else:
                 logging.warning(f"Could not find column for parametric modulator '{contrast_name}' (expected '{expected_col_name}'). Skipping contrast.")
                 continue
         else:
             # For the main effect, the column is just the base regressor name
-            contrast_def = final_design_matrix_columns.index(base_regressor)
+            contrast_vector = make_contrast_vector(design_matrix.columns, {base_regressor: 1})
 
-        # Create a contrast vector
-        contrast_vector = np.zeros(len(final_design_matrix_columns))
-        contrast_vector[contrast_def] = 1
-        
         # --- Compute and Save Contrast ---
         logging.info(f"  - Computing contrast for '{contrast_name}'...")
         z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
         
         # Save the z-map
         contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
-        contrast_filename.parent.mkdir(parents=True, exist_ok=True)
         z_map.to_filename(contrast_filename)
         logging.info(f"Saved z-map to: {contrast_filename.resolve()}")
 
@@ -145,6 +142,15 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         else:
             logging.error(f"  [FAILURE] File check failed for {contrast_filename.name}")
 
+def make_contrast_vector(columns, condition_weights: Dict[str, float]) -> np.ndarray:
+    """Helper function to create a contrast vector from a dictionary of weights."""
+    vector = np.zeros(len(columns))
+    for condition, weight in condition_weights.items():
+        if condition in columns:
+            vector[columns.get_loc(condition)] = weight
+        else:
+            logging.warning(f"Condition '{condition}' not found in design matrix columns. Skipping in contrast.")
+    return vector
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run standard GLM for a single subject.")
