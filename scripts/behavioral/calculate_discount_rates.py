@@ -57,20 +57,17 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     if 'choice' not in data.columns:
         raise ValueError("The required column 'choice' was not found in the data.")
 
-    # A more robust way to handle multiple choice formats
-    # 1. Explicitly map string labels to numeric values
-    if pd.api.types.is_string_dtype(data['choice']):
-        choice_map = {
-            'larger_later': 1, 'smaller_sooner': 0,
-            '1': 1, '0': 0,
-             1: 1,  0: 0 # Handle cases where numeric types are stored as strings
-        }
-        data['choice'] = data['choice'].str.strip().map(choice_map)
+    # Convert to string to handle categorical/object dtypes robustly
+    choice_col = data['choice'].astype(str).str.strip().str.lower()
 
-    # 2. Convert to numeric, coercing errors to NaN, which will be checked later
+    # Map string labels and numeric strings to 0/1
+    choice_map = {'larger_later': 1, 'smaller_sooner': 0, '1': 1, '0': 0}
+    data['choice'] = choice_col.map(choice_map)
+    
+    # Convert to numeric, coercing any non-mapped values to NaN
     data['choice'] = pd.to_numeric(data['choice'], errors='coerce')
 
-    # 3. Final validation: ensure the column contains only 0s and 1s (and NaNs)
+    # Final validation: ensure the column contains only 0s and 1s (after dropping NaNs)
     if not data['choice'].dropna().isin([0, 1]).all():
         raise ValueError("Choice column contains values other than 0, 1, or recognized strings.")
         
@@ -116,6 +113,11 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
     data.dropna(subset=required_cols, inplace=True)
     if len(data) < initial_rows:
         logging.info(f"Dropped {initial_rows - len(data)} rows with missing data.")
+        
+    # Abort if no valid trials remain after cleaning
+    if data.empty:
+        logging.warning("No valid trials remaining after removing rows with missing data. Aborting model fit.")
+        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
         
     # 4. Prepare numpy arrays for fitting
     S = data['small_amount'].values
@@ -194,9 +196,9 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Use a BIDS-compliant glob pattern that is more specific and robust
-    # This avoids mixing sub-01 and sub-010, and handles optional session identifiers
-    event_files = sorted(list(onsets_dir.glob(f'{subject_id}_*_task-discountFix_*events.tsv')))
+    # Correctly handle BIDS file naming conventions for event files.
+    # This pattern matches files with or without the optional `ses` entity.
+    event_files = sorted(list(onsets_dir.glob(f'{subject_id}*_task-discountFix*_events.tsv')))
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
