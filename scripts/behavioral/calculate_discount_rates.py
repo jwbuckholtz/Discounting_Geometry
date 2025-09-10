@@ -57,18 +57,22 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     if 'choice' not in data.columns:
         raise ValueError("The required column 'choice' was not found in the data.")
 
-    # Standardize the 'choice' column to integer (1 for larger_later, 0 for smaller_sooner)
+    # A more robust way to handle multiple choice formats
+    # 1. Explicitly map string labels to numeric values
     if pd.api.types.is_string_dtype(data['choice']):
-        # Create a boolean series and convert to int
-        is_larger_later = data['choice'].str.lower() == 'larger_later'
-        data['choice'] = is_larger_later.astype(int)
-    elif pd.api.types.is_numeric_dtype(data['choice']):
-        # Assuming 1 already means larger_later, ensure it's just 0s and 1s
-        if not data['choice'].isin([0, 1]).all():
-            raise ValueError("Numeric 'choice' column contains values other than 0 and 1.")
-        data['choice'] = data['choice'].astype(int)
-    else:
-        raise TypeError(f"Unsupported data type for 'choice' column: {data['choice'].dtype}")
+        choice_map = {
+            'larger_later': 1, 'smaller_sooner': 0,
+            '1': 1, '0': 0,
+             1: 1,  0: 0 # Handle cases where numeric types are stored as strings
+        }
+        data['choice'] = data['choice'].str.strip().map(choice_map)
+
+    # 2. Convert to numeric, coercing errors to NaN, which will be checked later
+    data['choice'] = pd.to_numeric(data['choice'], errors='coerce')
+
+    # 3. Final validation: ensure the column contains only 0s and 1s (and NaNs)
+    if not data['choice'].dropna().isin([0, 1]).all():
+        raise ValueError("Choice column contains values other than 0, 1, or recognized strings.")
         
     return data
 
@@ -100,15 +104,20 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
     if missing_cols:
         raise ValueError(f"Missing required behavioral columns: {', '.join(missing_cols)}")
 
-    # 2. Validate and standardize the 'choice' column
+    # 2. Validate and standardize the 'choice' column before dropping NaNs
     try:
         data = _validate_and_prepare_choice_data(data)
     except (ValueError, TypeError) as e:
         logging.error(f"Error processing 'choice' column: {e}")
-        # Return NaNs as the fit cannot proceed
         return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
+
+    # 3. Drop rows with missing data in critical columns
+    initial_rows = len(data)
+    data.dropna(subset=required_cols, inplace=True)
+    if len(data) < initial_rows:
+        logging.info(f"Dropped {initial_rows - len(data)} rows with missing data.")
         
-    # 3. Prepare numpy arrays for fitting
+    # 4. Prepare numpy arrays for fitting
     S = data['small_amount'].values
     L = data['large_amount'].values
     D = data['later_delay'].values
@@ -185,8 +194,9 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # BIDS-compliant glob pattern to ensure exact subject matching
-    event_files = sorted(list(onsets_dir.glob(f'{subject_id}_*_task-discountFix_events.tsv')))
+    # Use a BIDS-compliant glob pattern that is more specific and robust
+    # This avoids mixing sub-01 and sub-010, and handles optional session identifiers
+    event_files = sorted(list(onsets_dir.glob(f'{subject_id}_*_task-discountFix_*events.tsv')))
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
@@ -206,7 +216,18 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     data = pd.concat(all_runs_data, ignore_index=True)
 
     # Fit the discount rate and temperature using data from all runs
-    fit_results = fit_discount_rate(data, params)
+    try:
+        fit_results = fit_discount_rate(data, params)
+    except ValueError as e:
+        logging.error(f"Could not fit model for {subject_id}: {e}")
+        # Create a result dict with NaNs to indicate failure for this subject
+        fit_results = {
+            'k': np.nan, 
+            'tau': np.nan, 
+            'neg_log_likelihood': np.nan, 
+            'pseudo_r2': np.nan
+        }
+        
     k = fit_results['k']
 
     # Calculate subjective values
