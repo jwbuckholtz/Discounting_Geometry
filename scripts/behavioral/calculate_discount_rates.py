@@ -84,7 +84,7 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
         
     return data.drop(columns=['choice_original'])
 
-def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
+def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Tuple[Dict[str, float], pd.DataFrame]:
     """
     Fits the hyperbolic discounting model to behavioral data to estimate k and tau.
 
@@ -93,7 +93,9 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
         params (dict): Dictionary of modeling parameters from the config file.
 
     Returns:
-        dict: A dictionary containing the fitted parameters and model fit statistics.
+        tuple: (fit_results_dict, cleaned_data_frame) where fit_results contains 
+               the fitted parameters and model fit statistics, and cleaned_data_frame
+               contains the validated and cleaned trials used for fitting.
     """
     # Define the negative log-likelihood function to minimize
     def neg_log_likelihood(params, S, L, D, choices):
@@ -120,7 +122,7 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
         fit_data = _validate_and_prepare_choice_data(fit_data)
     except (ValueError, TypeError) as e:
         logging.error(f"Error processing 'choice' column for subject: {e}")
-        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
+        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}, pd.DataFrame()
 
     # 3. Drop rows with missing data in critical columns
     initial_rows = len(fit_data)
@@ -131,7 +133,7 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
     # Abort if no valid trials remain after cleaning
     if fit_data.empty:
         logging.warning("No valid trials remaining after removing rows with missing data. Aborting model fit.")
-        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
+        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}, pd.DataFrame()
         
     # 4. Prepare numpy arrays for fitting
     S = fit_data['small_amount'].values
@@ -151,7 +153,7 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
 
     if not result.success:
         logging.warning(f"Optimization failed. Reason: {result.message}")
-        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
+        return {'k': np.nan, 'tau': np.nan, 'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}, fit_data
 
     # Calculate pseudo-R-squared (McFadden's R-squared)
     ll_fit = -result.fun
@@ -167,7 +169,7 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
         'neg_log_likelihood': result.fun,
         'pseudo_r2': pseudo_r2
     }
-    return fit_results
+    return fit_results, fit_data
 
 def calculate_subjective_values(data: pd.DataFrame, k: float) -> pd.DataFrame:
     """
@@ -244,19 +246,20 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Use a more targeted BIDS-compliant search for discount-fix events
-    subject_label = subject_id.split('-')[-1]
+    # Use precise BIDS-compliant search for discount-fix events
+    # Use the full subject_id to avoid matching other subjects with similar IDs
     event_files = []
     
-    # Search specifically for discount-fix task files
-    for pattern in [f'sub-{subject_label}_*task-discountFix*_events.tsv', 
-                   f'sub-{subject_label}_task-discountFix*_events.tsv']:
+    # Search specifically for discount-fix task files with exact subject match
+    for pattern in [f'{subject_id}_*task-discountFix*_events.tsv', 
+                   f'{subject_id}_task-discountFix*_events.tsv']:
         event_files.extend(onsets_dir.glob(pattern))
     
     # Remove duplicates and sort
     event_files = sorted(list(set(event_files)))
     
     # Double-check with BIDS parsing to ensure exact match
+    subject_label = subject_id.split('-')[-1]
     validated_files = []
     for f in event_files:
         entities = _parse_bids_filename(f)
@@ -316,39 +319,28 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     data = pd.concat(all_runs_data, ignore_index=True)
 
     # Fit the discount rate and temperature using data from all runs
-    # This returns cleaned data that we should use for SV calculation and output
+    # fit_discount_rate now returns both fit results and cleaned data
     try:
-        fit_results = fit_discount_rate(data.copy(), params)
+        fit_results, cleaned_data = fit_discount_rate(data.copy(), params)
         
-        # Get the cleaned data by running the same cleaning steps
-        cleaned_data = data.copy()
-        required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
-        
-        # Apply the same cleaning steps as fit_discount_rate
-        try:
-            cleaned_data = _validate_and_prepare_choice_data(cleaned_data)
-            cleaned_data.dropna(subset=required_cols, inplace=True)
-        except (ValueError, TypeError) as e:
-            logging.error(f"Data cleaning failed for {subject_id}: {e}")
-            cleaned_data = data.copy()  # Fall back to original if cleaning fails
+        # If fitting failed but we got cleaned data back, use it
+        if cleaned_data.empty:
+            logging.error(f"No valid data remaining after cleaning for {subject_id}")
+            return {'subject_id': subject_id, 'k': np.nan, 'tau': np.nan, 
+                   'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
             
     except ValueError as e:
         logging.error(f"Could not fit model for {subject_id}: {e}")
-        # Create a result dict with NaNs to indicate failure for this subject
-        fit_results = {
-            'k': np.nan, 
-            'tau': np.nan, 
-            'neg_log_likelihood': np.nan, 
-            'pseudo_r2': np.nan
-        }
-        cleaned_data = data.copy()  # Use original data if fit completely failed
+        # Return failure without saving any output file
+        return {'subject_id': subject_id, 'k': np.nan, 'tau': np.nan, 
+               'neg_log_likelihood': np.nan, 'pseudo_r2': np.nan}
         
     k = fit_results['k']
 
-    # Calculate subjective values on the cleaned data
+    # Calculate subjective values on the cleaned data only
     data_with_sv = calculate_subjective_values(cleaned_data, k)
 
-    # Save the cleaned, trial-by-trial results (not the original dirty data)
+    # Save the cleaned, trial-by-trial results (never the original dirty data)
     output_dir = derivatives_dir / 'behavioral' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f'{subject_id}_discounting_with_sv.tsv'
