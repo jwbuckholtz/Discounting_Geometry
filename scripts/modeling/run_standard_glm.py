@@ -137,19 +137,58 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # --- Prepare Events for Each Run ---
     events_per_run = []
+    valid_bold_imgs = []
+    valid_confounds_dfs = []
+    valid_run_numbers = []
     
-    for run_number in run_numbers:
+    for i, run_number in enumerate(run_numbers):
         run_events_df = events_df[events_df['run'] == run_number].copy()
         
-        # Normalize onsets
-        first_onset_in_run = run_events_df['onset'].min()
-        run_events_df['onset'] -= first_onset_in_run
+        # Skip runs with no events
+        if run_events_df.empty:
+            logging.warning(f"Skipping run {run_number} - no events found")
+            continue
+            
+        # Check if onsets need normalization (only if not already run-relative)
+        first_onset = run_events_df['onset'].min()
+        if first_onset > 10:  # Heuristic: if first onset > 10s, likely session-relative
+            logging.info(f"Normalizing onsets for run {run_number} (first onset: {first_onset:.2f}s)")
+            run_events_df['onset'] -= first_onset
+        else:
+            logging.info(f"Onsets appear already run-relative for run {run_number} (first onset: {first_onset:.2f}s)")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
+        valid_bold_imgs.append(bold_imgs[i])
+        valid_confounds_dfs.append(confounds_dfs[i])
+        valid_run_numbers.append(run_number)
+    
+    # Check if we have any valid runs left
+    if not events_per_run:
+        raise ValueError(f"No valid runs with events found for subject {subject_id}")
+        
+    logging.info(f"Processing {len(events_per_run)} valid runs (skipped {len(run_numbers) - len(events_per_run)} empty runs)")
             
     # --- Fit the GLM ---
-    glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
+    glm.fit(valid_bold_imgs, events=events_per_run, confounds=valid_confounds_dfs)
+    
+    # --- Verify Design Matrix Consistency ---
+    if len(glm.design_matrices_) > 1:
+        # Check that all design matrices have the same columns
+        first_columns = set(glm.design_matrices_[0].columns)
+        for i, design_matrix in enumerate(glm.design_matrices_[1:], 1):
+            current_columns = set(design_matrix.columns)
+            if current_columns != first_columns:
+                missing = first_columns - current_columns
+                extra = current_columns - first_columns
+                logging.warning(f"Design matrix inconsistency in run {valid_run_numbers[i]}:")
+                if missing:
+                    logging.warning(f"  Missing columns: {missing}")
+                if extra:
+                    logging.warning(f"  Extra columns: {extra}")
+                    
+        # Log the final design matrix structure
+        logging.info(f"Design matrices have {len(first_columns)} columns: {sorted(first_columns)}")
 
     # --- Define and Compute Contrasts ---
     # Check for contrasts across ALL design matrices, not just the first one
@@ -185,15 +224,6 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         z_map.to_filename(contrast_filename)
         logging.info(f"Saved z-map to: {contrast_filename.resolve()}")
 
-def make_contrast_vector(columns, condition_weights: Dict[str, float]) -> np.ndarray:
-    """Helper function to create a contrast vector from a dictionary of weights."""
-    vector = np.zeros(len(columns))
-    for condition, weight in condition_weights.items():
-        if condition in columns:
-            vector[columns.get_loc(condition)] = weight
-        else:
-            logging.warning(f"Condition '{condition}' not found in design matrix columns. Skipping in contrast.")
-    return vector
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run standard GLM for a single subject.")
