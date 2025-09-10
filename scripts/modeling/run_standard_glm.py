@@ -83,7 +83,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         logging.info(f"Normalizing onsets for run {run_number} by subtracting {first_onset_in_run:.4f}s")
 
         # Add a 'trial_type' column for Nilearn's GLM
-        run_events_df['trial_type'] = 'decision'
+        run_events_df['trial_type'] = 'mean'
         
         # Ensure all potential modulator columns exist for this run, filling with 0 if absent
         for col in all_modulator_cols:
@@ -107,15 +107,15 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     design_matrix = glm.design_matrices_[0] # Use the first (and only) design matrix
     
     # Create a dict for all possible contrasts based on the config.
-    # We will always create a contrast for the main effect ('decision')
+    # We will always create a contrast for the main effect ('mean')
     # and one for each specified parametric modulator.
-    contrasts_to_compute = ['decision'] + params['glm']['parametric_modulators']
+    contrasts_to_compute = ['mean'] + params['glm']['parametric_modulators']
     
     for contrast_name in contrasts_to_compute:
-        # The base regressor for all trials is simply 'decision'
-        base_regressor = 'decision'
+        # The base regressor for all trials is simply 'mean'
+        base_regressor = 'mean'
         
-        # For parametric modulators, Nilearn creates a new column name like 'decisionxSVchosen'
+        # For parametric modulators, Nilearn creates a new column name like 'meanxSVchosen'
         if contrast_name != base_regressor:
             # Find the actual column name in the design matrix
             expected_col_name = f"{base_regressor}x{contrast_name}"
