@@ -196,9 +196,13 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Correctly handle BIDS file naming conventions for event files.
-    # This pattern matches files with or without the optional `ses` entity.
-    event_files = sorted(list(onsets_dir.glob(f'{subject_id}*_task-discountFix*_events.tsv')))
+    # Corrected BIDS-compliant glob pattern to ensure exact subject matching.
+    # Step 1: Find all event files starting with the exact subject ID.
+    # The underscore is critical to prevent `sub-01` from matching `sub-010`.
+    all_subject_files = onsets_dir.glob(f'{subject_id}_*_events.tsv')
+    
+    # Step 2: Filter for the specific task.
+    event_files = sorted([f for f in all_subject_files if '_task-discountFix_' in f.name])
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
@@ -206,10 +210,23 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
         
     # Load and concatenate data from all runs
     all_runs_data = []
+    unassigned_run_counter = 1
+    
     for event_file in event_files:
-        # Extract run number from filename, default to 1 if not found
+        # Extract run number from filename, with robust fallback
         run_part = event_file.stem.split('_run-')
-        run = int(run_part[1].split('_')[0]) if len(run_part) > 1 else 1
+        run = None
+        if len(run_part) > 1:
+            try:
+                run = int(run_part[1].split('_')[0])
+            except (ValueError, IndexError):
+                logging.warning(f"Could not parse run number from '{event_file.name}'.")
+
+        if run is None:
+            # If no run number was parsed, assign a unique sequential number
+            run = unassigned_run_counter
+            unassigned_run_counter += 1
+            logging.info(f"Assigning default run number {run} to '{event_file.name}'.")
         
         run_data = pd.read_csv(event_file, sep='\t')
         run_data['run'] = run
