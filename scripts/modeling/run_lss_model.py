@@ -21,11 +21,11 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
     
-    # CRITICAL FIX: Standardize confound columns across all runs for this subject
+    # Standardize confound columns across all runs for this subject
     if confounds_dfs:
-        common_confounds = list(reduce(set.intersection, [set(df.columns) for df in confounds_dfs]))
-        cleaned_confounds_dfs = [df[common_confounds].fillna(0) for df in confounds_dfs]
-        logging.info(f"Standardized confounds to {len(common_confounds)} common columns across {len(confounds_dfs)} runs.")
+        all_confound_columns = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
+        cleaned_confounds_dfs = [df.reindex(columns=all_confound_columns, fill_value=0) for df in confounds_dfs]
+        logging.info(f"Standardized confounds to {len(all_confound_columns)} common columns across {len(confounds_dfs)} runs.")
     else:
         cleaned_confounds_dfs = []
     
@@ -45,10 +45,11 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     events_df = pd.concat(corrected_events_list, ignore_index=True)
 
     # --- GLM Specification ---
+    analysis_params = params['analysis_params']
     glm = FirstLevelModel(
-        t_r=params['analysis_params']['t_r'],
-        slice_time_ref=params['analysis_params']['slice_time_ref'],
-        hrf_model=params['analysis_params']['glm']['hrf_model'],
+        t_r=analysis_params['t_r'],
+        slice_time_ref=analysis_params['slice_time_ref'],
+        hrf_model=analysis_params['glm']['hrf_model'],
         drift_model='cosine',
         mask_img=subject_data['mask_file'],
         signal_scaling=False,
@@ -126,14 +127,14 @@ def main() -> None:
 
     setup_logging()
 
-    # --- Load Data & Config ---
-    # This function now loads and prepares data from all runs for the subject
-    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    # Load the full config
     config = load_config(args.config)
-    analysis_params = config['analysis_params']
     
-    # --- Run Analysis ---
-    run_lss_for_subject(subject_data, analysis_params)
+    # Load all data for the subject using the utility function
+    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    
+    # Pass the full config to the analysis function
+    run_lss_for_subject(subject_data, config)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,7 @@ from functools import reduce
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
-    Runs a standard GLM with parametric modulators across one or more runs,
-    leveraging Nilearn's automatic design matrix creation.
+    Runs a standard GLM with parametric modulators across one or more runs.
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
@@ -25,83 +24,57 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     output_dir = derivatives_dir / 'standard_glm' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Pre-computation Data Cleaning ---
-    modulator_cols = [m for m in params['glm']['contrasts'] if m in events_df.columns and m != 'decision']
-    if events_df[modulator_cols].isnull().values.any():
-        logging.warning(f"NaNs found in modulator columns for {subject_id}. Filling with 0.")
-        events_df[modulator_cols] = events_df[modulator_cols].fillna(0)
-
-    if 'choice' in events_df.columns:
-        events_df['choice'] = (events_df['choice'] == 'larger_later').astype(int)
-
-    # --- Data Loading ---
-    # bold_imgs, confounds_dfs, events_df = subject_data['bold'], subject_data['confounds'], subject_data['events']
-    
-    # CRITICAL FIX: Standardize confound columns across all runs for this subject
+    # CRITICAL FIX: Standardize confounds using the UNION of columns
     if confounds_dfs:
-        common_confounds = list(reduce(set.intersection, [set(df.columns) for df in confounds_dfs]))
-        # Clean NaNs and select common columns
-        confounds_dfs = [df[common_confounds].fillna(0) for df in confounds_dfs]
-        logging.info(f"Standardized confounds to {len(common_confounds)} common columns across {len(confounds_dfs)} runs.")
-
+        all_confound_columns = list(reduce(set.union, [set(df.columns) for df in confounds_dfs]))
+        confounds_dfs = [df.reindex(columns=all_confound_columns, fill_value=0) for df in confounds_dfs]
+        logging.info(f"Standardized confounds to {len(all_confound_columns)} common columns across {len(confounds_dfs)} runs.")
+    
     # --- Model Specification ---
+    analysis_params = params['analysis_params']
     glm = FirstLevelModel(
-        t_r=params['analysis_params']['t_r'],
-        slice_time_ref=params['analysis_params']['slice_time_ref'],
-        hrf_model=params['analysis_params']['glm']['hrf_model'],
-        drift_model=params['analysis_params']['glm']['drift_model'],
-        smoothing_fwhm=params['analysis_params']['smoothing_fwhm'],
+        t_r=analysis_params['t_r'],
+        slice_time_ref=analysis_params['slice_time_ref'],
+        hrf_model=analysis_params['glm']['hrf_model'],
+        drift_model=analysis_params['glm']['drift_model'],
+        smoothing_fwhm=analysis_params['smoothing_fwhm'],
         mask_img=subject_data['mask_file'],
         n_jobs=-1
     )
-
+    
     # --- Prepare Events for Each Run ---
     events_per_run = []
-    final_bold_imgs = []
-    final_confounds_dfs = []
+    all_modulator_cols = analysis_params['glm']['parametric_modulators']
 
-    # Define the full set of potential modulator columns based on the config
-    all_modulator_cols = params['analysis_params']['glm']['parametric_modulators']
-
-    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
+    for i, bold_img in enumerate(bold_imgs):
         run_number = i + 1
         run_events_df = events_df[events_df['run'] == run_number].copy()
 
         if run_events_df.empty:
-            logging.warning(f"No events found for run {run_number}. Excluding this run from the GLM.")
+            logging.warning(f"No events found for run {run_number}. Skipping event preparation.")
+            events_per_run.append(None)
             continue
-
-        final_bold_imgs.append(bold_img)
-        final_confounds_dfs.append(confounds_df)
-
+        
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
-        
         run_events_df['trial_type'] = 'mean'
         
-        # Ensure all potential modulator columns exist for this run, filling with 0 if absent
-        # This is CRITICAL to ensure design matrices are consistent across runs
+        # Ensure all potential modulator columns exist and mean-center them
         for col in all_modulator_cols:
             if col not in run_events_df.columns:
                 run_events_df[col] = 0
+            # Mean-center the modulator
+            run_events_df[col] -= run_events_df[col].mean()
         
         nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
         events_per_run.append(run_events_df[nilearn_events_cols])
             
-    # --- Fit the GLM with all valid runs ---
-    if not final_bold_imgs:
-        logging.error(f"No runs with valid event data found for {subject_id}. Aborting GLM.")
-        return
-
-    logging.info(f"Fitting GLM to {len(final_bold_imgs)} valid run(s)...")
-    glm.fit(final_bold_imgs, events=events_per_run, confounds=final_confounds_dfs)
+    # --- Fit the GLM ---
+    glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    design_matrices = glm.design_matrices_
-    
-    full_design_matrix = pd.concat(design_matrices, ignore_index=True)
-    
-    contrasts_to_compute = ['mean'] + params['analysis_params']['glm']['parametric_modulators']
+    full_design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)
+    contrasts_to_compute = ['mean'] + analysis_params['glm']['parametric_modulators']
     
     for contrast_name in contrasts_to_compute:
         if contrast_name == 'mean':
@@ -110,16 +83,14 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             contrast_cols = [col for col in full_design_matrix.columns if col.startswith(f'meanx{contrast_name}')]
 
         if not contrast_cols:
-            logging.warning(f"Contrast '{contrast_name}' not found in any design matrix. Skipping.")
+            logging.warning(f"Contrast '{contrast_name}' not found in design matrix. Skipping.")
             continue
-            
-        # Build the contrast vector, correctly averaging over all runs
+
         contrast_vector = np.zeros(full_design_matrix.shape[1])
         weight = 1.0 / len(contrast_cols)
         for col in contrast_cols:
             contrast_vector[full_design_matrix.columns.get_loc(col)] = weight
         
-        logging.info(f"  - Computing contrast for '{contrast_name}' (averaging over {len(contrast_cols)} column(s))...")
         z_map = glm.compute_contrast(contrast_vector, output_type='z_score')
         
         contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
@@ -145,13 +116,14 @@ def main() -> None:
 
     setup_logging()
 
-    # --- Load Data & Config ---
-    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    # Load the full config
     config = load_config(args.config)
-    analysis_params = config['analysis_params']
     
-    # --- Run Analysis ---
-    run_standard_glm_for_subject(subject_data, analysis_params)
+    # Load all data for the subject using the utility function
+    subject_data = load_concatenated_subject_data(args.config, args.env, args.subject)
+    
+    # Pass the full config to the analysis function
+    run_standard_glm_for_subject(subject_data, config)
 
 
 if __name__ == "__main__":

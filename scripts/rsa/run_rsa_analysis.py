@@ -217,7 +217,7 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
     
     # Safeguard against asking for more splits than there are groups
     n_groups = len(np.unique(groups))
-    # CRITICAL FIX: Use the top-level cv_folds key
+    # CRITICAL FIX: The params dict is now the 'rsa' sub-dict
     n_splits = params['cv_folds']
     if n_splits > n_groups:
         logging.warning(f"Requested {n_splits} CV splits, but only {n_groups} groups are available. Setting n_splits to {n_groups}.")
@@ -396,7 +396,7 @@ def main() -> None:
                     theoretical_rdm, 
                     groups_valid, 
                     mask_img,
-                    analysis_params['rsa']
+                    analysis_params['rsa'] # Pass the 'rsa' sub-dictionary
                 )
                 
                 # Save the resulting map

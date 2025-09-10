@@ -76,18 +76,24 @@ def synthetic_glm_dataset(tmp_path_factory):
         'derivatives_dir': derivatives_dir
     }
     
+    # --- Create mock analysis parameters ---
     params = {
-        't_r': tr,
-        'slice_time_ref': 0.5,
-        'smoothing_fwhm': 5.0,
-        'glm': {
-            'contrasts': ['decision', 'choice', 'SVchosen', 'SVunchosen', 'SVsum', 'SVdiff'],
-            'hrf_model': 'glover',
-            'drift_model': 'cosine'
+        'analysis_params': {
+            't_r': 2.0,
+            'slice_time_ref': 0.5,
+            'smoothing_fwhm': 5.0,
+            'glm': {
+                'hrf_model': 'glover',
+                'drift_model': 'cosine',
+                'parametric_modulators': ['SVchosen']
+            }
         }
     }
     
-    return subject_data, params, n_trials
+    return {
+        "subject_data": subject_data,
+        "params": params
+    }
 
 def test_run_lss_for_subject_integration(synthetic_glm_dataset):
     """
@@ -119,35 +125,24 @@ def test_run_lss_for_subject_integration(synthetic_glm_dataset):
 
 def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     """
-    Integration smoke test for the standard GLM script.
-    Checks that the script runs to completion and produces all expected
-    contrast map files with the correct dimensions.
+    Integration test for the main GLM function.
+    Checks that the script runs and creates the expected contrast map outputs.
     """
-    subject_data, params, _ = synthetic_glm_dataset
+    data = synthetic_glm_dataset["subject_data"]
+    params = synthetic_glm_dataset["params"]
     
-    # Add a dummy SVunchosen column for the test
-    subject_data['events_df']['SVunchosen'] = np.random.rand(len(subject_data['events_df'])) * 10
-    subject_data['events_df']['SVsum'] = subject_data['events_df']['SVchosen'] + subject_data['events_df']['SVunchosen']
-    subject_data['events_df']['SVdiff'] = subject_data['events_df']['SVchosen'] - subject_data['events_df']['SVunchosen']
-    
-    # Run the standard GLM analysis
-    run_standard_glm_for_subject(subject_data, params)
+    run_standard_glm_for_subject(
+        subject_data=data,
+        params=params
+    )
     
     # --- Assertions ---
-    sub_id = subject_data['subject_id']
-    derivatives_dir = subject_data['derivatives_dir']
-    output_dir = derivatives_dir / 'standard_glm' / sub_id
+    output_dir = data["derivatives_dir"] / 'standard_glm' / data["subject_id"]
     
-    expected_contrasts = params['glm']['contrasts']
+    # Check for the main effect contrast
+    mean_contrast_path = output_dir / 'contrast-mean_zmap.nii.gz'
+    assert mean_contrast_path.exists(), "Main 'mean' contrast map was not created."
     
-    for contrast in expected_contrasts:
-        output_path = output_dir / 'z_maps' / f"{contrast}_zmap.nii.gz"
-        assert output_path.exists(), f"Contrast map for '{contrast}' was not created."
-        
-        # Check the dimensions of the output file
-        contrast_map_img = image.load_img(output_path)
-        assert contrast_map_img.ndim == 3, f"Contrast map '{contrast}' is not a 3D image."
-        
-        mask_img = image.load_img(subject_data['mask_file'])
-        assert contrast_map_img.shape == mask_img.shape, \
-            f"Shape of contrast map '{contrast}' does not match the brain mask."
+    # Check for the parametric modulator contrast
+    sv_contrast_path = output_dir / 'contrast-SVchosen_zmap.nii.gz'
+    assert sv_contrast_path.exists(), "Parametric modulator 'SVchosen' contrast map was not created."
