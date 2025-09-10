@@ -196,41 +196,54 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # Corrected BIDS-compliant glob pattern to ensure exact subject matching.
-    # Step 1: Find all event files starting with the exact subject ID.
-    # The underscore is critical to prevent `sub-01` from matching `sub-010`.
-    all_subject_files = onsets_dir.glob(f'{subject_id}_*_events.tsv')
-    
-    # Step 2: Filter for the specific task.
-    event_files = sorted([f for f in all_subject_files if '_task-discountFix_' in f.name])
+    # A robust method to find BIDS-compliant event files for the exact subject and task.
+    # This avoids both subject-mixing (e.g., sub-01 vs sub-010) and overly restrictive patterns.
+    all_task_files = onsets_dir.glob('*_task-discountFix*_events.tsv')
+    event_files = sorted([
+        f for f in all_task_files if f.name.startswith(f'{subject_id}_')
+    ])
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
         return None
         
-    # Load and concatenate data from all runs
+    # Load and concatenate data, ensuring unique run IDs
     all_runs_data = []
-    unassigned_run_counter = 1
     
-    for event_file in event_files:
-        # Extract run number from filename, with robust fallback
-        run_part = event_file.stem.split('_run-')
-        run = None
-        if len(run_part) > 1:
+    # First, parse files with explicit run numbers to reserve those IDs
+    explicit_runs = {}  # path -> run_id
+    unnumbered_files = []
+    for f in event_files:
+        if '_run-' in f.name:
             try:
-                run = int(run_part[1].split('_')[0])
+                run_part = f.stem.split('_run-')[1]
+                run_id = int(run_part.split('_')[0])
+                explicit_runs[f] = run_id
             except (ValueError, IndexError):
-                logging.warning(f"Could not parse run number from '{event_file.name}'.")
+                logging.warning(f"Could not parse run number from '{f.name}'; will assign a unique ID.")
+                unnumbered_files.append(f)
+        else:
+            unnumbered_files.append(f)
 
-        if run is None:
-            # If no run number was parsed, assign a unique sequential number
-            run = unassigned_run_counter
-            unassigned_run_counter += 1
-            logging.info(f"Assigning default run number {run} to '{event_file.name}'.")
-        
-        run_data = pd.read_csv(event_file, sep='\t')
-        run_data['run'] = run
+    # Process explicitly numbered files
+    for f, run_id in explicit_runs.items():
+        run_data = pd.read_csv(f, sep='\t')
+        run_data['run'] = run_id
         all_runs_data.append(run_data)
+        
+    # Determine the next available run number for unnumbered files
+    next_run_id = max(explicit_runs.values()) + 1 if explicit_runs else 1
+
+    # Process unnumbered files with unique, sequential run IDs
+    for f in unnumbered_files:
+        logging.info(f"Assigning run number {next_run_id} to file without explicit run ID: '{f.name}'.")
+        run_data = pd.read_csv(f, sep='\t')
+        run_data['run'] = next_run_id
+        all_runs_data.append(run_data)
+        next_run_id += 1
+
+    # Sort data by run number before concatenation to maintain order
+    all_runs_data.sort(key=lambda df: df['run'].iloc[0])
     
     data = pd.concat(all_runs_data, ignore_index=True)
 
