@@ -66,27 +66,31 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # --- Prepare Events for Each Run ---
     events_per_run = []
+    final_bold_imgs = []
+    final_confounds_dfs = []
     all_modulator_cols = analysis_params['glm']['parametric_modulators']
 
-    for i, bold_img in enumerate(bold_imgs):
+    for i, (bold_img, confounds_df) in enumerate(zip(bold_imgs, confounds_dfs)):
         run_number = i + 1
         run_events_df = events_df[events_df['run'] == run_number].copy()
 
         if run_events_df.empty:
-            logging.warning(f"No events found for run {run_number}. Skipping event preparation.")
-            events_per_run.append(None)
-            continue
+            logging.warning(f"No events found for run {run_number}. Pruning this run from the analysis.")
+            continue # Skip this run completely
         
-        # Normalize onsets
+        # This run is valid, so we keep all its data
+        final_bold_imgs.append(bold_img)
+        final_confounds_dfs.append(confounds_df)
+        
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
         
-        # Process events using the new helper function
+        # Process events using the helper function
         prepared_events = prepare_run_events(run_events_df, all_modulator_cols)
         events_per_run.append(prepared_events)
             
     # --- Fit the GLM ---
-    glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
+    glm.fit(final_bold_imgs, events=events_per_run, confounds=final_confounds_dfs)
 
     # --- Define and Compute Contrasts ---
     full_design_matrix = pd.concat(glm.design_matrices_, ignore_index=True)

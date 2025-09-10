@@ -251,7 +251,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
     events_df = pd.read_csv(events_path, sep='\t')
     
     # --- 2. Determine Analysis Type & Get Parameters ---
-    # The 'params' dictionary is now analysis_params from the config
+    # The 'params' dictionary is analysis_params from the config
     if target in params['mvpa']['classification']['target_variables']:
         analysis_params = params['mvpa']['classification']
         is_categorical = True
@@ -259,7 +259,7 @@ def run_subject_level_decoding(subject_id: str, derivatives_dir: Path, fmriprep_
         analysis_params = params['mvpa']['regression']
         is_categorical = False
     else:
-        raise ValueError(f"Target '{target}' is not defined in classification or regression config.")
+        raise ValueError(f"Target '{target}' not defined in classification or regression config.")
 
     # --- 3. Prepare Data ---
     labels, valid_trials, groups = prepare_decoding_data(

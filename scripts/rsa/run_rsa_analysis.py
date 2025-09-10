@@ -245,7 +245,10 @@ def run_searchlight_rsa(beta_maps_img: nib.Nifti1Image, theoretical_rdm: np.ndar
     
     scores_1d = searchlight.scores_
     
-    return searchlight.masker_.inverse_transform(scores_1d)
+    # Reshape the 1D scores to 2D for inverse_transform
+    scores_2d = scores_1d.reshape(-1, 1)
+    
+    return searchlight.masker_.inverse_transform(scores_2d)
 
 
 def save_rdm(subject_id: str, rdm: np.ndarray, model_name: str, output_dir: Path) -> None:

@@ -44,6 +44,21 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
 
     events_df = pd.concat(corrected_events_list, ignore_index=True)
 
+    # --- Data Pruning ---
+    # Find runs with events and keep only the corresponding data
+    runs_with_events = events_df['run'].unique()
+    valid_run_indices = [i for i, run in enumerate(bold_imgs) if run['run_id'] in runs_with_events]
+    
+    if len(valid_run_indices) < len(bold_imgs):
+        logging.warning(f"Pruning {len(bold_imgs) - len(valid_run_indices)} run(s) with no matching events.")
+    
+    bold_imgs = [bold_imgs[i] for i in valid_run_indices]
+    confounds_dfs = [confounds_dfs[i] for i in valid_run_indices]
+
+    if not bold_imgs:
+        logging.error("No valid runs with event data found. Aborting.")
+        return
+
     # --- GLM Specification ---
     analysis_params = params['analysis_params']
     glm = FirstLevelModel(

@@ -55,6 +55,7 @@ analysis_params:
   
   rsa:
     searchlight_radius: 8
+    cv_folds: 5 # Number of folds for cross-validated RSA
     models:
       - choice
       - later_delay
