@@ -10,6 +10,28 @@ import logging
 from nilearn import image
 from functools import reduce
 
+def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) -> pd.DataFrame:
+    """
+    Prepares a single run's event DataFrame for the GLM.
+    - Ensures all modulator columns exist.
+    - Mean-centers all parametric modulators.
+    - Formats the DataFrame for Nilearn.
+    """
+    run_events_df['trial_type'] = 'mean'
+    
+    # Ensure all potential modulator columns exist and mean-center them
+    for col in all_modulator_cols:
+        if col not in run_events_df.columns:
+            run_events_df[col] = 0
+        
+        # Mean-center the modulator if it has variance
+        if run_events_df[col].std() > 1e-6: # Use a small epsilon for float comparison
+            run_events_df[col] -= run_events_df[col].mean()
+    
+    # Return only the columns Nilearn needs, in a consistent order
+    nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
+    return run_events_df[nilearn_events_cols]
+
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
     """
     Runs a standard GLM with parametric modulators across one or more runs.
@@ -55,19 +77,13 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             events_per_run.append(None)
             continue
         
+        # Normalize onsets
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
-        run_events_df['trial_type'] = 'mean'
         
-        # Ensure all potential modulator columns exist and mean-center them
-        for col in all_modulator_cols:
-            if col not in run_events_df.columns:
-                run_events_df[col] = 0
-            # Mean-center the modulator
-            run_events_df[col] -= run_events_df[col].mean()
-        
-        nilearn_events_cols = ['onset', 'duration', 'trial_type'] + all_modulator_cols
-        events_per_run.append(run_events_df[nilearn_events_cols])
+        # Process events using the new helper function
+        prepared_events = prepare_run_events(run_events_df, all_modulator_cols)
+        events_per_run.append(prepared_events)
             
     # --- Fit the GLM ---
     glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)

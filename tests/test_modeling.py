@@ -8,13 +8,56 @@ from nilearn import image
 
 # Correctly import the refactored function
 from scripts.modeling.run_lss_model import run_lss_for_subject
-from scripts.modeling.run_standard_glm import run_standard_glm_for_subject
+from scripts.modeling.run_standard_glm import run_standard_glm_for_subject, prepare_run_events
 
 # Helper function to create fake data for testing
 def create_fake_nifti(shape=(10, 10, 10, 20), affine=np.eye(4)):
     """Creates a fake Nifti image for testing."""
     data = np.random.randn(*shape)
     return nib.Nifti1Image(data, affine)
+
+def test_prepare_run_events_unit():
+    """
+    Unit test for the event preparation logic in the standard GLM.
+    - Tests mean-centering of parametric modulators.
+    - Tests addition of missing modulator columns.
+    - Tests handling of zero-variance modulators.
+    """
+    # --- 1. Create a synthetic events DataFrame ---
+    events_df = pd.DataFrame({
+        'onset': [10, 20, 30, 40],
+        'duration': [1, 1, 1, 1],
+        'sv_modulator': [1, 2, 3, 4],       # Should be mean-centered
+        'zero_modulator': [2, 2, 2, 2]      # Should remain 2 (mean-centered to 0 later)
+    })
+    
+    all_modulators = ['sv_modulator', 'zero_modulator', 'missing_modulator']
+    
+    # --- 2. Run the function to be tested ---
+    prepared_df = prepare_run_events(events_df.copy(), all_modulators)
+    
+    # --- 3. Assertions ---
+    # Assert that the mean of the 'sv_modulator' is now close to zero
+    assert np.isclose(prepared_df['sv_modulator'].mean(), 0.0), \
+        "Modulator with variance was not correctly mean-centered."
+        
+    # Assert that the zero-variance modulator is now all zeros after centering
+    assert np.allclose(prepared_df['zero_modulator'], 0.0), \
+        "Zero-variance modulator was not correctly centered to zero."
+        
+    # Assert that the 'missing_modulator' was added and is all zeros
+    assert 'missing_modulator' in prepared_df.columns, \
+        "Missing modulator column was not added."
+    assert np.allclose(prepared_df['missing_modulator'], 0.0), \
+        "Missing modulator column was not filled with zeros."
+        
+    # Assert that the 'trial_type' column was added correctly
+    assert 'trial_type' in prepared_df.columns and (prepared_df['trial_type'] == 'mean').all(), \
+        "'trial_type' column was not added or has incorrect values."
+        
+    # Assert that the original columns were not dropped
+    assert 'onset' in prepared_df.columns and 'duration' in prepared_df.columns, \
+        "Original onset/duration columns were dropped."
 
 @pytest.fixture(scope="module")
 def synthetic_glm_dataset(tmp_path_factory):
