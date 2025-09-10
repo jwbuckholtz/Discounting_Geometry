@@ -57,6 +57,9 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     if 'choice' not in data.columns:
         raise ValueError("The required column 'choice' was not found in the data.")
 
+    # Store original choice values for error reporting
+    data['choice_original'] = data['choice']
+
     # Convert to string to handle categorical/object dtypes robustly
     choice_col = data['choice'].astype(str).str.strip().str.lower()
 
@@ -67,11 +70,16 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     # Convert to numeric, coercing any non-mapped values to NaN
     data['choice'] = pd.to_numeric(data['choice'], errors='coerce')
 
-    # Final validation: ensure the column contains only 0s and 1s (after dropping NaNs)
-    if not data['choice'].dropna().isin([0, 1]).all():
+    # Raise an error if any choice values could not be mapped
+    if data['choice'].isnull().any():
+        unmapped_values = data[data['choice'].isnull()]['choice_original'].unique()
+        raise ValueError(f"Unrecognized choice values found: {list(unmapped_values)}")
+
+    # Final validation: ensure the column contains only 0s and 1s
+    if not data['choice'].isin([0, 1]).all():
         raise ValueError("Choice column contains values other than 0, 1, or recognized strings.")
         
-    return data
+    return data.drop(columns=['choice_original'])
 
 def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, float]:
     """
@@ -94,6 +102,9 @@ def fit_discount_rate(data: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, f
         return -log_likelihood
 
     # --- Data Preparation and Validation ---
+    
+    # Work on a copy to avoid modifying the original DataFrame
+    data = data.copy()
     
     # 1. Validate that all required columns are present
     required_cols = ['small_amount', 'large_amount', 'later_delay', 'choice']
@@ -196,12 +207,12 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
     Processes all behavioral data for a single subject, handling multiple runs.
     """
     
-    # A robust method to find BIDS-compliant event files for the exact subject and task.
-    # This avoids both subject-mixing (e.g., sub-01 vs sub-010) and overly restrictive patterns.
-    all_task_files = onsets_dir.glob('*_task-discountFix*_events.tsv')
-    event_files = sorted([
-        f for f in all_task_files if f.name.startswith(f'{subject_id}_')
-    ])
+    # Use a BIDS-compliant glob pattern to find event files for the specific task and subject.
+    # This is the most robust way to avoid subject-mixing and incorrect file selection.
+    subject_label = subject_id.split('-')[-1]
+    event_files = sorted(onsets_dir.glob(
+        f'sub-{subject_label}_*_task-discountFix*_events.tsv'
+    ))
     
     if not event_files:
         logging.warning(f"No event files found for {subject_id}")
@@ -218,9 +229,11 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
             try:
                 run_part = f.stem.split('_run-')[1]
                 run_id = int(run_part.split('_')[0])
+                if run_id in explicit_runs.values():
+                    raise ValueError(f"Duplicate run number '{run_id}' found. Check filenames.")
                 explicit_runs[f] = run_id
-            except (ValueError, IndexError):
-                logging.warning(f"Could not parse run number from '{f.name}'; will assign a unique ID.")
+            except (ValueError, IndexError) as e:
+                logging.warning(f"Could not parse run number from '{f.name}': {e}")
                 unnumbered_files.append(f)
         else:
             unnumbered_files.append(f)
