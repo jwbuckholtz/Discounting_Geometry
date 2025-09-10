@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from scipy.stats import gamma
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any
@@ -10,33 +9,90 @@ import logging
 from nilearn import image
 from functools import reduce
 
-def prepare_run_events(run_events_df: pd.DataFrame, all_modulator_cols: list) -> pd.DataFrame:
+def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols: list, run_numbers: list) -> list:
+    """
+    Validates modulators across all runs and returns only those that are valid everywhere.
+    This ensures consistent design matrices across runs.
+    
+    Args:
+        events_df: Complete events DataFrame with all runs
+        all_modulator_cols: List of potential modulator columns
+        run_numbers: List of run numbers to check
+        
+    Returns:
+        List of modulator columns that are valid across all runs
+    """
+    valid_modulators = []
+    
+    for modulator in all_modulator_cols:
+        is_valid_across_runs = True
+        
+        for run_number in run_numbers:
+            run_events = events_df[events_df['run'] == run_number]
+            
+            # Check if column exists and handle NaN values
+            if modulator not in run_events.columns:
+                run_events_copy = run_events.copy()
+                run_events_copy[modulator] = 0
+            else:
+                run_events_copy = run_events.copy()
+                
+            # Handle all-NaN columns safely
+            if run_events_copy[modulator].isna().all():
+                logging.warning(f"Modulator '{modulator}' is all NaN in run {run_number}. Will be excluded.")
+                is_valid_across_runs = False
+                break
+                
+            # Fill remaining NaNs with column mean and center
+            col_mean = run_events_copy[modulator].mean()
+            if pd.isna(col_mean):
+                logging.warning(f"Modulator '{modulator}' has no valid values in run {run_number}. Will be excluded.")
+                is_valid_across_runs = False
+                break
+                
+            run_events_copy[modulator] = run_events_copy[modulator].fillna(col_mean)
+            run_events_copy[modulator] -= col_mean
+            
+            # Check for zero variance after centering
+            if np.isclose(run_events_copy[modulator].var(), 0):
+                logging.warning(f"Modulator '{modulator}' has zero variance in run {run_number}. Will be excluded.")
+                is_valid_across_runs = False
+                break
+                
+        if is_valid_across_runs:
+            valid_modulators.append(modulator)
+            
+    return valid_modulators
+
+def prepare_run_events(run_events_df: pd.DataFrame, valid_modulator_cols: list) -> pd.DataFrame:
     """
     Prepares a single run's event DataFrame for the GLM in the format Nilearn expects
-    for parametric modulation.
+    for parametric modulation. Only processes modulators that have been validated across all runs.
     """
-    # Clean and mean-center all potential modulator columns first
-    for col in all_modulator_cols:
+    # Clean and mean-center the validated modulator columns
+    for col in valid_modulator_cols:
         if col not in run_events_df.columns:
             run_events_df[col] = 0
-        run_events_df[col] = run_events_df[col].fillna(run_events_df[col].mean())
-        run_events_df[col] -= run_events_df[col].mean()
+        else:
+            # Handle NaN values safely (should be rare after validation)
+            col_mean = run_events_df[col].mean()
+            if not pd.isna(col_mean):
+                run_events_df[col] = run_events_df[col].fillna(col_mean)
+                run_events_df[col] -= col_mean
+            else:
+                # Fallback: set to zero if still all NaN
+                run_events_df[col] = 0
 
     # Base events for the main effect of each trial
     events_base = run_events_df[['onset', 'duration']].copy()
     events_base['trial_type'] = 'mean'
     events_base['modulation'] = 1
     
-    # Create new event rows for each parametric modulator
+    # Create new event rows for each validated parametric modulator
     events_modulated_list = [events_base]
-    for modulator in all_modulator_cols:
-        # Skip modulators with no variance after centering
-        if np.isclose(run_events_df[modulator].var(), 0):
-            logging.warning(f"Modulator '{modulator}' has zero variance and will be dropped.")
-            continue
-            
+    for modulator in valid_modulator_cols:
         modulator_events = run_events_df[['onset', 'duration']].copy()
-        modulator_events['trial_type'] = modulator # Regressor will be named after the column
+        modulator_events['trial_type'] = modulator
         modulator_events['modulation'] = run_events_df[modulator]
         events_modulated_list.append(modulator_events)
 
@@ -71,10 +127,17 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         n_jobs=-1
     )
     
+    # --- Validate Modulators Across All Runs ---
+    all_modulator_cols = analysis_params['glm']['parametric_modulators']
+    valid_modulator_cols = _validate_modulators_across_runs(events_df, all_modulator_cols, run_numbers)
+    
+    if len(valid_modulator_cols) < len(all_modulator_cols):
+        dropped = set(all_modulator_cols) - set(valid_modulator_cols)
+        logging.info(f"Dropped modulators that were invalid across runs: {dropped}")
+    
     # --- Prepare Events for Each Run ---
     events_per_run = []
-    all_modulator_cols = analysis_params['glm']['parametric_modulators']
-
+    
     for run_number in run_numbers:
         run_events_df = events_df[events_df['run'] == run_number].copy()
         
@@ -82,22 +145,36 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         first_onset_in_run = run_events_df['onset'].min()
         run_events_df['onset'] -= first_onset_in_run
         
-        prepared_events = prepare_run_events(run_events_df, all_modulator_cols)
+        prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
             
     # --- Fit the GLM ---
     glm.fit(bold_imgs, events=events_per_run, confounds=confounds_dfs)
 
     # --- Define and Compute Contrasts ---
-    # We are interested in the 'mean' effect and the parametric modulators.
-    # We need to check if they exist in the design matrix, as some might have been dropped.
-    design_matrix_columns = glm.design_matrices_[0].columns
-    contrasts_to_compute = ['mean'] + all_modulator_cols
+    # Check for contrasts across ALL design matrices, not just the first one
+    all_design_columns = set()
+    for design_matrix in glm.design_matrices_:
+        all_design_columns.update(design_matrix.columns)
+    
+    contrasts_to_compute = ['mean'] + valid_modulator_cols
     
     for contrast_name in contrasts_to_compute:
-        if contrast_name not in design_matrix_columns:
+        if contrast_name not in all_design_columns:
             logging.warning(
-                f"Contrast '{contrast_name}' not found in design matrix columns. Skipping."
+                f"Contrast '{contrast_name}' not found in any design matrix. Skipping."
+            )
+            continue
+            
+        # Check if the contrast exists in ALL runs (required for valid contrast)
+        missing_in_runs = []
+        for i, design_matrix in enumerate(glm.design_matrices_):
+            if contrast_name not in design_matrix.columns:
+                missing_in_runs.append(i + 1)
+                
+        if missing_in_runs:
+            logging.warning(
+                f"Contrast '{contrast_name}' missing in run(s) {missing_in_runs}. Skipping."
             )
             continue
             
