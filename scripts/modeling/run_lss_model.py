@@ -30,6 +30,15 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     
     logging.info(f"LSS event validation passed - required columns present: {required_event_columns}")
     
+    # CRITICAL FIX: Ensure consistent data types for run comparisons
+    # Convert run column to integer for consistent type matching
+    try:
+        events_df['run'] = events_df['run'].astype(int)
+        logging.info("Converted LSS events run column to integer for consistent type matching")
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Cannot convert LSS events run column to integer: {e}. "
+                        f"Run values: {events_df['run'].unique()}")
+    
     # --- Onset Normalization ---
     corrected_events_list = []
     for run_number in sorted(events_df['run'].unique()):
@@ -64,15 +73,28 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         n_jobs = config_n_jobs
         logging.info(f"Using configured n_jobs={n_jobs} for LSS parallel processing")
     
+    # CRITICAL FIX: Safe parameter lookups with informative error messages
+    glm_params = analysis_params.get('glm', {})
+    hrf_model = glm_params.get('hrf_model', 'glover')
+    
+    # Required analysis parameters 
+    required_analysis_params = ['t_r', 'slice_time_ref']
+    missing_params = [param for param in required_analysis_params if param not in analysis_params]
+    if missing_params:
+        raise ValueError(f"Missing required LSS analysis parameters: {missing_params}. "
+                        f"Available parameters: {list(analysis_params.keys())}")
+    
     glm = FirstLevelModel(
         t_r=analysis_params['t_r'],
         slice_time_ref=analysis_params['slice_time_ref'],
-        hrf_model=analysis_params['glm']['hrf_model'],
-        drift_model='cosine',
+        hrf_model=hrf_model,
+        drift_model='cosine',  # Fixed for LSS
         mask_img=subject_data['mask_file'],
         signal_scaling=False,
         n_jobs=n_jobs
     )
+    
+    logging.info(f"LSS GLM configured: HRF={hrf_model}, TR={analysis_params['t_r']}s, n_jobs={n_jobs}")
 
     # --- Prepare a dictionary of per-run event dataframes (for nuisance regressors) ---
     events_per_run = {

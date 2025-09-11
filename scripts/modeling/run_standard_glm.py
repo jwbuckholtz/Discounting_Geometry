@@ -80,8 +80,11 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
                     logging.warning(f"Truncating run {i+1} confounds from {n_confound_rows} to {n_volumes} rows")
                     harmonized_df = harmonized_df.iloc[:n_volumes]
                 
-                # Verify fix
-                assert len(harmonized_df) == n_volumes, f"Failed to align confounds for run {i+1}"
+                # CRITICAL FIX: Verify alignment with explicit check instead of assert
+                # Assert statements are ignored when Python runs with optimizations (-O flag)
+                if len(harmonized_df) != n_volumes:
+                    raise ValueError(f"Failed to align confounds for run {i+1}: "
+                                   f"expected {n_volumes} volumes, got {len(harmonized_df)} rows")
                 logging.info(f"Successfully aligned run {i+1} confounds to {n_volumes} volumes")
             
             # Add missing columns with zeros only for runs that have confounds
@@ -287,15 +290,35 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         n_jobs = config_n_jobs
         logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
     
+    # CRITICAL FIX: Safe parameter lookups with informative error messages
+    glm_params = analysis_params.get('glm', {})
+    
+    # Required GLM parameters with defaults
+    required_glm_params = {
+        'hrf_model': glm_params.get('hrf_model', 'glover'),
+        'drift_model': glm_params.get('drift_model', 'cosine')
+    }
+    
+    # Required analysis parameters 
+    required_analysis_params = ['t_r', 'slice_time_ref', 'smoothing_fwhm']
+    missing_params = [param for param in required_analysis_params if param not in analysis_params]
+    if missing_params:
+        raise ValueError(f"Missing required analysis parameters: {missing_params}. "
+                        f"Available parameters: {list(analysis_params.keys())}")
+    
     glm = FirstLevelModel(
         t_r=analysis_params['t_r'],
         slice_time_ref=analysis_params['slice_time_ref'],
-        hrf_model=analysis_params['glm']['hrf_model'],
-        drift_model=analysis_params['glm']['drift_model'],
+        hrf_model=required_glm_params['hrf_model'],
+        drift_model=required_glm_params['drift_model'],
         smoothing_fwhm=analysis_params['smoothing_fwhm'],
         mask_img=subject_data['mask_file'],
         n_jobs=n_jobs
     )
+    
+    logging.info(f"GLM configured: HRF={required_glm_params['hrf_model']}, "
+                f"drift={required_glm_params['drift_model']}, "
+                f"TR={analysis_params['t_r']}s, n_jobs={n_jobs}")
     
     # --- First Pass: Identify Runs with Events ---
     runs_with_events = []
@@ -346,7 +369,10 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         run_start_times = analysis_params.get('run_start_times', {})
         # CRITICAL FIX: Handle both string and numeric keys for run_start_times
         # YAML can parse numeric keys as integers, but we might store them as strings
-        explicit_start = run_start_times.get(str(run_number)) or run_start_times.get(run_number)
+        # Also preserve explicit zero values (important for first runs)
+        explicit_start = run_start_times.get(str(run_number))
+        if explicit_start is None:
+            explicit_start = run_start_times.get(run_number)
         
         first_onset = run_events_df['onset'].min()
         last_onset = run_events_df['onset'].max()
@@ -600,11 +626,37 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     logging.info(f"Event validation passed - required columns present: {required_event_columns}")
     
+    # CRITICAL FIX: Ensure consistent data types for run comparisons
+    # Convert run column to integer to match run_numbers type
+    try:
+        events_df['run'] = events_df['run'].astype(int)
+        logging.info("Converted events run column to integer for consistent type matching")
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Cannot convert events run column to integer: {e}. "
+                        f"Run values: {events_df['run'].unique()}")
+    
     # 1. DURATION IMPROVEMENT: Use reaction time instead of fixed 4s duration
     if 'response_time' in events_df.columns:
         # Replace duration with actual reaction time
         events_df['duration'] = events_df['response_time']
         logging.info("Using reaction time as event duration instead of fixed 4s duration")
+        
+        # CRITICAL FIX: Validate reaction time durations
+        # Check for invalid durations (negative, zero, or NaN)
+        invalid_durations = (events_df['duration'] <= 0) | events_df['duration'].isna()
+        invalid_count = invalid_durations.sum()
+        
+        if invalid_count > 0:
+            invalid_values = events_df.loc[invalid_durations, 'duration'].unique()
+            logging.warning(f"Found {invalid_count} trials with invalid durations: {invalid_values}")
+            
+            # Option 1: Remove invalid trials
+            events_df = events_df[~invalid_durations].copy()
+            logging.warning(f"Removed {invalid_count} trials with invalid durations")
+            
+            # Check if we have any trials left
+            if len(events_df) == 0:
+                raise ValueError("All trials have invalid durations - cannot proceed")
         
         # Log duration statistics
         duration_stats = events_df['duration'].describe()
@@ -677,7 +729,9 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     else:
         logging.warning("Choice regressors not available - skipping choice model")
     
-    model_specifications = analysis_params['glm'].get('model_specifications', default_models)
+    # CRITICAL FIX: Safe GLM parameter access for model specifications
+    glm_config = analysis_params.get('glm', {})
+    model_specifications = glm_config.get('model_specifications', default_models)
     logging.info(f"Models to run: {list(model_specifications.keys())}")
     
     # Run each model separately
