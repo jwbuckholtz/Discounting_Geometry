@@ -38,6 +38,13 @@ if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
     exit 1
 fi
 
+# Verify config file exists
+CONFIG_FILE="$PROJECT_ROOT/config/project_config.yaml"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERROR: Config file does not exist: $CONFIG_FILE"
+    exit 1
+fi
+
 # --- Shell Setup ---
 # Change to the project root directory for consistent execution context
 cd "$PROJECT_ROOT"
@@ -45,8 +52,8 @@ cd "$PROJECT_ROOT"
 # Ensure logs directory exists for output files
 mkdir -p logs
 
-# Load the base Python module. This is necessary for the virtual environment to work.
-module load python/3.9.0
+# Load Python module with compatibility check
+source slurm/load_python_module.sh
 
 # Activate your Python environment.
 source "${PROJECT_ROOT}/.venv/bin/activate"
@@ -73,6 +80,6 @@ echo "Processing Subject: $CURRENT_SUBJECT"
 
 # Run the Python script for the current subject
 # Arguments: --config config_path --env environment --subject subject_id
-python scripts/modeling/run_lss_model.py --config config/project_config.yaml --env hpc --subject "$CURRENT_SUBJECT"
+python scripts/modeling/run_lss_model.py --config "$CONFIG_FILE" --env hpc --subject "$CURRENT_SUBJECT"
 
 echo "--- Finished LSS for $CURRENT_SUBJECT ---"

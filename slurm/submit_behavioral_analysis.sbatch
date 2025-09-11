@@ -26,7 +26,7 @@ mkdir -p logs
 
 # --- Setup ---
 # Load the python module and activate your virtual environment
-ml python/3.9
+source slurm/load_python_module.sh
 source .venv/bin/activate
 
 # --- Command ---

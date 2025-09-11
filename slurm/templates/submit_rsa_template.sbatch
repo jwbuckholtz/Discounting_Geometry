@@ -33,7 +33,7 @@ cd "$PROJECT_ROOT"
 mkdir -p logs
 
 # --- Setup ---
-ml python/3.9
+source slurm/load_python_module.sh
 source .venv/bin/activate
 
 # --- Command ---

@@ -1,0 +1,3 @@
+# This file ensures the logs/ directory is tracked by git
+# SLURM job logs will be written to this directory
+# The directory must exist at job submission time for sbatch to work properly

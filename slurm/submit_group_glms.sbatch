@@ -34,7 +34,7 @@ if [[ ! -f "config/project_config.yaml" ]]; then
 fi
 
 # Activate your project's Python environment
-ml python/3.9
+source slurm/load_python_module.sh
 source .venv/bin/activate
 
 # Define the list of contrasts to run group-level models on

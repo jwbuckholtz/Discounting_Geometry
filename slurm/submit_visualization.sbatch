@@ -43,7 +43,7 @@ cd "$PROJECT_ROOT"
 mkdir -p logs
 
 # Load the Python module to make libraries available on the compute node
-ml python/3.9
+source slurm/load_python_module.sh
 
 echo "--- Job Details ---"
 echo "Job ID: $SLURM_JOB_ID"

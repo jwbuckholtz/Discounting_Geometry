@@ -28,7 +28,7 @@ cd "$PROJECT_ROOT"
 mkdir -p logs
 
 # --- Load Modules ---
-ml python/3.9
+source slurm/load_python_module.sh
 
 # --- Environment Setup ---
 source .venv/bin/activate
