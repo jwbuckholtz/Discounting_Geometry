@@ -24,6 +24,9 @@ set -e  # Exit immediately if any command fails
 # Change to the directory where you are submitting the script from
 cd $SLURM_SUBMIT_DIR
 
+# Ensure logs directory exists for output files
+mkdir -p logs
+
 # --- Environment Setup ---
 # Parameterized paths for portability
 PROJECT_ROOT="${PROJECT_ROOT:-/home/users/joshuawb/Code/Discounting_Geometry}"

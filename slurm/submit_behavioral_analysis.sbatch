@@ -14,6 +14,13 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Running on host: $(hostname)"
 echo "Submitted from: $(pwd)"
 
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd "$SLURM_SUBMIT_DIR"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
+
 # --- Setup ---
 # Load the python module and activate your virtual environment
 ml python/3.9

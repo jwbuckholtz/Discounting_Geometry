@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #
 # This script submits a group-level GLM analysis job for each specified contrast.
 #

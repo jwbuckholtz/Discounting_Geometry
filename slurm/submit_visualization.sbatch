@@ -18,6 +18,13 @@ set -e # Exit immediately if a command exits with a non-zero status.
 : "${CONFIG_FILE:="config/project_config.yaml"}"
 : "${ENV:="hpc"}"
 
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd "$SLURM_SUBMIT_DIR"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
+
 # Load the Python module to make libraries available on the compute node
 ml python/3.9
 

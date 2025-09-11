@@ -24,14 +24,21 @@ echo "Target: $TARGET"
 echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd "$SLURM_SUBMIT_DIR"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
+
 # --- Setup ---
 ml python/3.9
 source .venv/bin/activate
 
 # --- Command ---
-# Arguments: subject_id (positional), then flags
+# Arguments: subject_id (positional), then flags (all quoted for safety)
 python scripts/mvpa/run_decoding_analysis.py \
-    $SUBJECT_ID \
-    --target $TARGET \
-    --config $CONFIG_FILE \
-    --env $ENV
+    "$SUBJECT_ID" \
+    --target "$TARGET" \
+    --config "$CONFIG_FILE" \
+    --env "$ENV"

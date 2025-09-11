@@ -24,13 +24,21 @@ echo "Analysis Type: $ANALYSIS_TYPE"
 echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
+# --- Shell Setup ---
+# Change to the directory where you are submitting the script from
+cd "$SLURM_SUBMIT_DIR"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
+
 # --- Setup ---
 ml python/3.9
 source .venv/bin/activate
 
 # --- Command ---
+# All variables quoted for safety
 python scripts/rsa/run_rsa_analysis.py \
-    --subject $SUBJECT_ID \
-    --analysis-type $ANALYSIS_TYPE \
-    --config $CONFIG_FILE \
-    --env $ENV
+    --subject "$SUBJECT_ID" \
+    --analysis-type "$ANALYSIS_TYPE" \
+    --config "$CONFIG_FILE" \
+    --env "$ENV"
