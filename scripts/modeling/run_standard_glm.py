@@ -620,13 +620,29 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         
         logging.info(f"Model {model_name}: Computing special contrast 'larger_later > smaller_sooner'")
         
-        # Create contrast vector: +1 for larger_later, -1 for smaller_sooner
-        contrast_vector = np.zeros(len(glm.design_matrices_[0].columns))
-        column_names = list(glm.design_matrices_[0].columns)
+        # CRITICAL FIX: Find a design matrix containing choice regressors
+        # Don't assume the first run has the choice columns
+        design_matrix_with_choice = None
+        choice_column_names = None
+        
+        for run_idx, design_matrix in enumerate(glm.design_matrices_):
+            column_names = list(design_matrix.columns)
+            if 'choice_larger_later' in column_names and 'choice_smaller_sooner' in column_names:
+                design_matrix_with_choice = design_matrix
+                choice_column_names = column_names
+                logging.info(f"Found choice regressors in design matrix for run {run_idx + 1}")
+                break
+        
+        if design_matrix_with_choice is None:
+            raise ValueError(f"No design matrix contains both choice regressors ('choice_larger_later', 'choice_smaller_sooner'). "
+                           f"Available columns in design matrices: {[list(dm.columns) for dm in glm.design_matrices_[:3]]}")
+        
+        # Create contrast vector based on the design matrix that has the choice columns
+        contrast_vector = np.zeros(len(choice_column_names))
         
         # Find indices for the choice regressors
-        larger_later_idx = column_names.index('choice_larger_later')
-        smaller_sooner_idx = column_names.index('choice_smaller_sooner')
+        larger_later_idx = choice_column_names.index('choice_larger_later')
+        smaller_sooner_idx = choice_column_names.index('choice_smaller_sooner')
         
         contrast_vector[larger_later_idx] = 1.0   # Positive weight for larger_later
         contrast_vector[smaller_sooner_idx] = -1.0  # Negative weight for smaller_sooner
@@ -675,6 +691,14 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         raise ValueError(f"Cannot convert run_numbers to integers: {e}. "
                         f"Run numbers: {run_numbers}")
     
+    # CRITICAL FIX: Detect duplicate run numbers in main function too
+    unique_runs = set(run_numbers_int)
+    if len(unique_runs) != len(run_numbers_int):
+        duplicates = [run for run in unique_runs if run_numbers_int.count(run) > 1]
+        raise ValueError(f"Duplicate run numbers detected in main GLM function: {duplicates}. "
+                        f"Each run must have a unique identifier. "
+                        f"Run numbers: {run_numbers_int}")
+    
     # Process events DataFrame for modeling improvements
     events_df = subject_data['events_df'].copy()
     
@@ -698,6 +722,11 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # 1. DURATION IMPROVEMENT: Use reaction time instead of fixed 4s duration
     if 'response_time' in events_df.columns:
+        # CRITICAL FIX: Convert response_time to numeric before assignment and validation
+        # String values could cause TypeError during numeric comparison
+        events_df['response_time'] = pd.to_numeric(events_df['response_time'], errors='coerce')
+        logging.info("Converted response_time to numeric format for validation")
+        
         # Replace duration with actual reaction time
         events_df['duration'] = events_df['response_time']
         logging.info("Using reaction time as event duration instead of fixed 4s duration")
