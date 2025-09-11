@@ -34,6 +34,11 @@ else
     pip install -e .
 fi
 
+# --- Validate Required Variables ---
+: ${CONTRAST:?ERROR: CONTRAST not set - required for group GLM analysis}
+: ${CONFIG_FILE:?ERROR: CONFIG_FILE not set - required for configuration}
+: ${ENV:?ERROR: ENV not set - required for environment selection}
+
 # --- Job Execution ---
 echo "========================================="
 echo "Job started on $(hostname) at $(date)"

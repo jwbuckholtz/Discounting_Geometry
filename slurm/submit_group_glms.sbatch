@@ -7,8 +7,14 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=2
 
-# --- Setup ---
+# --- Shell Setup ---
 set -e # Exit if any command fails
+
+# Change to the directory where you are submitting the script from
+cd "$SLURM_SUBMIT_DIR"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
 
 # Activate your project's Python environment
 ml python/3.9

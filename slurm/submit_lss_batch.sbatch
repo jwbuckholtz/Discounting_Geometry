@@ -22,19 +22,27 @@ set -e  # Exit immediately if any command fails
 
 # --- Shell Setup ---
 # Change to the directory where you are submitting the script from
-cd $SLURM_SUBMIT_DIR
+cd "$SLURM_SUBMIT_DIR"
 
 # Ensure logs directory exists for output files
 mkdir -p logs
 
 # --- Environment Setup ---
-# Parameterized paths for portability
-PROJECT_ROOT="${PROJECT_ROOT:-/home/users/joshuawb/Code/Discounting_Geometry}"
-BEHAVIORAL_DIR="${BEHAVIORAL_DIR:-/oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral}"
+# Require all paths via environment variables for portability
+# Users must set these before submitting jobs
+: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
+: ${BEHAVIORAL_DIR:?ERROR: BEHAVIORAL_DIR not set - export BEHAVIORAL_DIR=/path/to/behavioral/data}
 
-# Validate required environment variables
-: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set}
-: ${BEHAVIORAL_DIR:?ERROR: BEHAVIORAL_DIR not set}
+# Verify directories exist before proceeding
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "ERROR: PROJECT_ROOT directory does not exist: $PROJECT_ROOT"
+    exit 1
+fi
+
+if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
+    echo "ERROR: BEHAVIORAL_DIR directory does not exist: $BEHAVIORAL_DIR"
+    exit 1
+fi
 
 # Load the base Python module. This is necessary for the virtual environment to work.
 module load python/3.9.0
@@ -55,7 +63,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -ge "$NUM_SUBJECTS" ]; then
 fi
 
 # Use the SLURM task ID to select the correct subject from the full list
-CURRENT_SUBJECT=${ALL_SUBJECTS[$SLURM_ARRAY_TASK_ID]}
+CURRENT_SUBJECT="${ALL_SUBJECTS[$SLURM_ARRAY_TASK_ID]}"
 
 echo "--- Starting LSS Model ---"
 echo "SLURM Job ID: $SLURM_JOB_ID"
@@ -64,6 +72,6 @@ echo "Processing Subject: $CURRENT_SUBJECT"
 
 # Run the Python script for the current subject
 # Arguments: --config config_path --env environment --subject subject_id
-python scripts/modeling/run_lss_model.py --config config/project_config.yaml --env hpc --subject $CURRENT_SUBJECT
+python scripts/modeling/run_lss_model.py --config config/project_config.yaml --env hpc --subject "$CURRENT_SUBJECT"
 
 echo "--- Finished LSS for $CURRENT_SUBJECT ---"

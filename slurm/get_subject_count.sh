@@ -5,8 +5,8 @@ set -e  # Exit immediately if any command fails
 # This ensures array bounds match the actual subject count
 #
 
-# Path to behavioral data (parameterized for portability)
-BEHAVIORAL_DIR="${BEHAVIORAL_DIR:-/oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral}"
+# Path to behavioral data (required via environment variable)
+: ${BEHAVIORAL_DIR:?ERROR: BEHAVIORAL_DIR not set - export BEHAVIORAL_DIR=/path/to/behavioral/data}
 
 # Check if directory exists
 if [ ! -d "$BEHAVIORAL_DIR" ]; then
