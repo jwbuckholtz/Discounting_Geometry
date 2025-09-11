@@ -15,8 +15,11 @@ echo "Running on host: $(hostname)"
 echo "Submitted from: $(pwd)"
 
 # --- Shell Setup ---
-# Change to the directory where you are submitting the script from
-cd "$SLURM_SUBMIT_DIR"
+# Require PROJECT_ROOT for consistent execution context
+: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
+
+# Change to project directory for consistent execution
+cd "$PROJECT_ROOT"
 
 # Ensure logs directory exists for output files
 mkdir -p logs

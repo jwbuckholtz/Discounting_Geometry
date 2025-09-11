@@ -58,6 +58,14 @@ source .venv/bin/activate
 
 # --- Execute the Script ---
 echo "Running visualization script..."
-./scripts/visualization/run_all_visualizations_for_subject.sh "$SUBJECT_ID" "$ROI_DIR"
 
-echo "Job finished with exit code $?"
+# Capture exit code before set -e can interfere
+set +e  # Temporarily disable exit-on-error
+./scripts/visualization/run_all_visualizations_for_subject.sh "$SUBJECT_ID" "$ROI_DIR"
+EXIT_CODE=$?
+set -e  # Re-enable exit-on-error
+
+echo "Job finished with exit code $EXIT_CODE"
+
+# Exit with the actual script's exit code
+exit $EXIT_CODE

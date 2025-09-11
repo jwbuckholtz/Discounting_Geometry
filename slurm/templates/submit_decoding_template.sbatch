@@ -14,6 +14,7 @@ set -e  # Exit immediately if any command fails
 : ${TARGET:?ERROR: TARGET not set - required for decoding target}
 : ${CONFIG_FILE:?ERROR: CONFIG_FILE not set - required for configuration}
 : ${ENV:?ERROR: ENV not set - required for environment selection}
+: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
 
 # --- Print job submission info ---
 echo "Job ID: $SLURM_JOB_ID"
@@ -25,8 +26,8 @@ echo "Config File: $CONFIG_FILE"
 echo "Environment: $ENV"
 
 # --- Shell Setup ---
-# Change to the directory where you are submitting the script from
-cd "$SLURM_SUBMIT_DIR"
+# Change to project directory for consistent execution context
+cd "$PROJECT_ROOT"
 
 # Ensure logs directory exists for output files
 mkdir -p logs
