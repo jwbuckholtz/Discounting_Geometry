@@ -113,8 +113,7 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         return None
     
     none_count = sum(1 for df in confounds_dfs if df is None or (hasattr(df, 'empty') and df.empty))
-    logging.info(f"Harmonized {len(confounds_dfs)} confound entries ({len(valid_harmonized)} with data, {none_count} without) "
-                f"with {len(unified_columns)} columns: {unified_columns}")
+    logging.info(f"Harmonized {len(confounds_dfs)} confound entries ({len(valid_harmonized)} with data, {none_count} without) with {len(unified_columns)} columns: {unified_columns}")
     return harmonized_dfs
 
 def _calculate_vif(X: np.ndarray, feature_names: list) -> Dict[str, float]:
@@ -185,8 +184,14 @@ def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols
                 
             run_events_copy = run_events.copy()
                 
-            # Handle all-NaN columns safely
+            # CRITICAL FIX: Convert modulator to numeric before statistics
+            # String values would cause TypeError during .mean()/.var() operations
+            run_events_copy[modulator] = pd.to_numeric(run_events_copy[modulator], errors='coerce')
+            logging.debug(f"Converted modulator '{modulator}' to numeric for run {run_number}")
+                
+            # Handle all-NaN columns safely (including conversion failures)
             if run_events_copy[modulator].isna().all():
+                logging.debug(f"Modulator '{modulator}' has all NaN values in run {run_number} (after numeric conversion)")
                 continue  # Skip this run for this modulator
             
             # Count non-NaN entries - need at least 2 for variance calculation
@@ -227,6 +232,10 @@ def prepare_run_events(run_events_df: pd.DataFrame, valid_modulator_cols: list) 
         if col not in run_events_df.columns:
             run_events_df[col] = 0
         else:
+            # CRITICAL FIX: Convert to numeric before statistics operations
+            # String values would cause TypeError during .mean() operations
+            run_events_df[col] = pd.to_numeric(run_events_df[col], errors='coerce')
+            
             # Handle NaN values safely (should be rare after validation)
             col_mean = run_events_df[col].mean()
             if not pd.isna(col_mean):
@@ -280,6 +289,20 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         raise ValueError(f"Data misalignment: {len(bold_imgs)} BOLD images, "
                         f"{len(confounds_dfs)} confound files, but {len(run_numbers)} run numbers. "
                         f"All lists must have the same length and matching order.")
+    
+    # CRITICAL FIX: Check for None/empty entries before creating dictionaries
+    none_bold_indices = [i for i, img in enumerate(bold_imgs) if img is None]
+    none_confound_indices = [i for i, cf in enumerate(confounds_dfs) if cf is None]
+    
+    if none_bold_indices:
+        none_runs = [run_numbers[i] for i in none_bold_indices]
+        raise ValueError(f"None BOLD images detected for runs: {none_runs}. "
+                        f"All runs must have valid BOLD image paths or loaded images.")
+    
+    if none_confound_indices:
+        none_runs = [run_numbers[i] for i in none_confound_indices]
+        logging.warning(f"None confound entries detected for runs: {none_runs}. "
+                       f"These runs will proceed without confound regression.")
     
     # Create dictionaries keyed by run number for safe access
     bold_imgs_by_run = {run_num: bold_imgs[i] for i, run_num in enumerate(run_numbers)}
@@ -481,6 +504,30 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         
     logging.info(f"Processing {len(events_per_run)} valid runs (skipped {len(run_numbers) - len(events_per_run)} empty runs)")
     
+    # CRITICAL FIX: Re-validate modulators after final run filtering
+    # Some modulators may have been valid only because of runs that were later excluded
+    if valid_run_numbers != runs_with_events:
+        logging.info(f"Re-validating modulators after run filtering: {len(run_numbers)} -> {len(valid_run_numbers)} runs")
+        revalidated_modulator_cols = _validate_modulators_across_runs(events_df, valid_modulator_cols, valid_run_numbers)
+        
+        if len(revalidated_modulator_cols) < len(valid_modulator_cols):
+            dropped_after_filtering = set(valid_modulator_cols) - set(revalidated_modulator_cols)
+            logging.warning(f"Model {model_name}: Dropped modulators after run filtering: {dropped_after_filtering}")
+            
+            # Update events for each run with the re-validated modulator set
+            for i, prepared_events in enumerate(events_per_run):
+                events_per_run[i] = prepare_run_events(
+                    events_df[events_df['run'] == valid_run_numbers[i]], 
+                    revalidated_modulator_cols
+                )
+            
+            valid_modulator_cols = revalidated_modulator_cols
+            
+        if not valid_modulator_cols:
+            error_msg = f"Model {model_name}: No valid regressors remain after run filtering - cannot proceed"
+            logging.error(error_msg)
+            raise ValueError(error_msg)
+    
     # --- Harmonize Confounds ---
     harmonized_confounds = _harmonize_confounds(valid_confounds_dfs, valid_bold_imgs)
     
@@ -494,8 +541,11 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     
     # --- Check for Multicollinearity with VIF Across All Runs ---
     if glm.design_matrices_:
-        # Get only task regressors (exclude drift, constant, and confound regressors)
-        design_cols = glm.design_matrices_[0].columns
+        # CRITICAL FIX: Build task regressors from union of ALL design matrices
+        # Don't just use first run which might be missing regressors present in later runs
+        all_design_cols = set()
+        for design_matrix in glm.design_matrices_:
+            all_design_cols.update(design_matrix.columns)
         
         # More sophisticated filtering to exclude nuisance regressors
         nuisance_patterns = ['drift', 'constant', 'tx', 'ty', 'tz', 'rx', 'ry', 'rz', 
@@ -503,10 +553,12 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
                            'a_comp_cor', 'cos', 'sin', 'dvars', 'std_dvars']
         
         task_regressors = []
-        for col in design_cols:
+        for col in all_design_cols:
             is_nuisance = any(pattern in col.lower() for pattern in nuisance_patterns)
             if not is_nuisance:
                 task_regressors.append(col)
+        
+        logging.info(f"Identified {len(task_regressors)} task regressors from union of all design matrices: {task_regressors}")
         
         if len(task_regressors) > 1:
             # Calculate VIF for each run and track maximum across runs
