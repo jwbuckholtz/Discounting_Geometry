@@ -59,6 +59,12 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         else:
             harmonized_df = df.copy()
             
+            # CRITICAL FIX: Convert confound columns to numeric before processing
+            # Non-numeric confound columns can cause downstream errors during model fitting
+            for col in harmonized_df.columns:
+                harmonized_df[col] = pd.to_numeric(harmonized_df[col], errors='coerce')
+            logging.debug(f"Run {i+1}: Converted confound columns to numeric format")
+            
             # CRITICAL: Verify confound row count matches BOLD volumes
             # Load BOLD image to get volume count (bold_imgs may contain paths, Path objects, or loaded images)
             bold_entry = bold_imgs[i]
@@ -853,18 +859,39 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     # CRITICAL FIX: Defer subject_data copy until all updates are ready
     # Will combine with run_numbers update below for efficiency
     
-    # Define models to run based on available columns
-    default_models = {
-        'value_chosen': ['SVchosen'],
-        'value_unchosen': ['SVunchosen'], 
-        'value_difference': ['SVdiff'],
-        'large_amount': ['large_amount']
-    }
+    # CRITICAL FIX: Build models dynamically based on available columns
+    # Only include models if their required regressors exist in events_df
+    default_models = {}
     
-    # CRITICAL FIX: Only include choice model if choice regressors were created
+    # Check for value models
+    if 'SVchosen' in events_df.columns:
+        default_models['value_chosen'] = ['SVchosen']
+        logging.info("SVchosen available - including value_chosen model")
+    else:
+        logging.warning("SVchosen not available - skipping value_chosen model")
+        
+    if 'SVunchosen' in events_df.columns:
+        default_models['value_unchosen'] = ['SVunchosen']
+        logging.info("SVunchosen available - including value_unchosen model")
+    else:
+        logging.warning("SVunchosen not available - skipping value_unchosen model")
+        
+    if 'SVdiff' in events_df.columns:
+        default_models['value_difference'] = ['SVdiff']
+        logging.info("SVdiff available - including value_difference model")
+    else:
+        logging.warning("SVdiff not available - skipping value_difference model")
+        
+    if 'large_amount' in events_df.columns:
+        default_models['large_amount'] = ['large_amount']
+        logging.info("large_amount available - including large_amount model")
+    else:
+        logging.warning("large_amount not available - skipping large_amount model")
+    
+    # Check for choice model (already conditional)
     if 'choice_smaller_sooner' in events_df.columns and 'choice_larger_later' in events_df.columns:
         default_models['choice'] = ['choice_smaller_sooner', 'choice_larger_later']
-        logging.info("Choice regressors available - including choice model in analysis")
+        logging.info("Choice regressors available - including choice model")
     else:
         logging.warning("Choice regressors not available - skipping choice model")
     
