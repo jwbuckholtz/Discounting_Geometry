@@ -6,7 +6,7 @@ from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any, List
 import logging
 
-def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame]:
+def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame] or None:
     """
     Harmonizes confound DataFrames to have identical column sets and orders.
     This prevents design matrix misalignment across runs.
@@ -15,10 +15,10 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame
         confounds_dfs: List of confound DataFrames, one per run
         
     Returns:
-        List of harmonized confound DataFrames with consistent columns
+        List of harmonized confound DataFrames with consistent columns, or None if no confounds
     """
-    if not confounds_dfs:
-        return confounds_dfs
+    if not confounds_dfs or all(df is None or df.empty for df in confounds_dfs):
+        return None
         
     # Find the union of all columns across runs
     all_columns = set()
@@ -136,6 +136,9 @@ def prepare_run_events(run_events_df: pd.DataFrame, valid_modulator_cols: list) 
     # Combine all event types into a single long-format DataFrame
     final_events_df = pd.concat(events_modulated_list, ignore_index=True)
     
+    # Sort by onset to ensure chronological order (required by Nilearn)
+    final_events_df = final_events_df.sort_values('onset').reset_index(drop=True)
+    
     return final_events_df
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
@@ -164,15 +167,27 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         n_jobs=-1
     )
     
-    # --- Validate Modulators Across All Runs ---
+    # --- First Pass: Identify Runs with Events ---
+    runs_with_events = []
+    for run_number in run_numbers:
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+        if not run_events_df.empty:
+            runs_with_events.append(run_number)
+        else:
+            logging.warning(f"Run {run_number} has no events - will be skipped")
+    
+    if not runs_with_events:
+        raise ValueError(f"No runs with events found for subject {subject_id}")
+    
+    # --- Validate Modulators Only on Runs with Events ---
     all_modulator_cols = analysis_params['glm']['parametric_modulators']
-    valid_modulator_cols = _validate_modulators_across_runs(events_df, all_modulator_cols, run_numbers)
+    valid_modulator_cols = _validate_modulators_across_runs(events_df, all_modulator_cols, runs_with_events)
     
     if len(valid_modulator_cols) < len(all_modulator_cols):
         dropped = set(all_modulator_cols) - set(valid_modulator_cols)
-        logging.info(f"Dropped modulators that were invalid across runs: {dropped}")
+        logging.info(f"Dropped modulators that were invalid across runs with events: {dropped}")
     
-    # --- Prepare Events for Each Run ---
+    # --- Prepare Events for Each Valid Run ---
     events_per_run = []
     valid_bold_imgs = []
     valid_confounds_dfs = []
@@ -181,31 +196,26 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     for i, run_number in enumerate(run_numbers):
         run_events_df = events_df[events_df['run'] == run_number].copy()
         
-        # Skip runs with no events
+        # Skip runs with no events (already identified)
         if run_events_df.empty:
-            logging.warning(f"Skipping run {run_number} - no events found")
             continue
             
-        # More sophisticated onset normalization logic
+        # Explicit onset normalization based on run timing expectations
         first_onset = run_events_df['onset'].min()
         last_onset = run_events_df['onset'].max()
-        onset_range = last_onset - first_onset
         
-        # Only normalize if:
-        # 1. First onset is substantially > 0 (suggesting session-relative timing)
-        # 2. The range of onsets is reasonable (not a single event at a late time)
-        # 3. First onset is not just a short baseline (< 30s suggests intentional baseline)
-        should_normalize = (
-            first_onset > 30 and  # More conservative threshold
-            onset_range > 10 and  # Ensure multiple events over time
-            first_onset < 600     # Sanity check: < 10 minutes
-        )
+        # Check if we have explicit run start time information in the config
+        # For now, use a more conservative approach that preserves intentional timing
         
-        if should_normalize:
-            logging.info(f"Normalizing onsets for run {run_number} (range: {first_onset:.1f}s - {last_onset:.1f}s)")
+        # Only normalize if onsets are clearly session-relative (very large values)
+        # This is much more conservative to avoid destroying intentional baselines
+        if first_onset > 300:  # 5 minutes - clearly session-relative
+            logging.info(f"Normalizing clearly session-relative onsets for run {run_number} (first: {first_onset:.1f}s)")
             run_events_df['onset'] -= first_onset
         else:
-            logging.info(f"Preserving original onsets for run {run_number} (range: {first_onset:.1f}s - {last_onset:.1f}s)")
+            # For ambiguous cases, preserve the original timing
+            logging.info(f"Preserving onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
+            # Note: If this causes issues, explicit run timing should be added to the config
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
@@ -221,6 +231,11 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # --- Harmonize Confounds ---
     harmonized_confounds = _harmonize_confounds(valid_confounds_dfs)
+    
+    if harmonized_confounds is None:
+        logging.info("No confounds available - fitting GLM without confound regressors")
+    else:
+        logging.info(f"Using {len(harmonized_confounds)} harmonized confound DataFrames")
             
     # --- Fit the GLM ---
     glm.fit(valid_bold_imgs, events=events_per_run, confounds=harmonized_confounds)
