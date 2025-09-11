@@ -15,14 +15,7 @@ set -e  # Exit immediately if any command fails
 # This prevents unnecessary out-of-bounds task submissions and wasted compute resources
 #SBATCH --array=0-102
 
-# --- Shell Setup ---
-# Change to the project root directory for consistent execution context
-cd "$PROJECT_ROOT"
-
-# Ensure logs directory exists for output files
-mkdir -p logs
-
-# --- Environment Setup ---
+# --- Environment Validation (BEFORE any usage) ---
 # Require all paths via environment variables for portability
 # Users must set these before submitting jobs
 : ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
@@ -38,6 +31,13 @@ if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
     echo "ERROR: BEHAVIORAL_DIR directory does not exist: $BEHAVIORAL_DIR"
     exit 1
 fi
+
+# --- Shell Setup ---
+# Change to the project root directory for consistent execution context
+cd "$PROJECT_ROOT"
+
+# Ensure logs directory exists for output files
+mkdir -p logs
 
 # Load the base Python module. This is necessary for the virtual environment to work.
 module load python/3.9.0

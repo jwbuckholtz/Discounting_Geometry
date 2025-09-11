@@ -40,16 +40,8 @@ echo "Setting SLURM array bounds to: 0-$MAX_INDEX"
 # --- Submit Job with Dynamic Array Bounds ---
 echo "Submitting LSS batch job with dynamic array bounds..."
 
-# Create temporary sbatch script with dynamic array bounds
-TEMP_SCRIPT=$(mktemp)
-trap "rm -f $TEMP_SCRIPT" EXIT
-
-# Copy the template but replace the array bounds
-sed "s/#SBATCH --array=0-102/#SBATCH --array=0-$MAX_INDEX/" \
-    slurm/submit_lss_batch.sbatch > "$TEMP_SCRIPT"
-
-# Submit with environment variables
+# Submit directly with array bounds parameter (more robust than sed editing)
 export PROJECT_ROOT BEHAVIORAL_DIR
-sbatch "$TEMP_SCRIPT"
+sbatch --array=0-"$MAX_INDEX" slurm/submit_lss_batch.sbatch
 
 echo "LSS batch job submitted successfully with array bounds 0-$MAX_INDEX"

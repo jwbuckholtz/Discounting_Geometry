@@ -34,15 +34,9 @@ ml python/3.9
 # Activate the virtual environment
 source .venv/bin/activate
 
-# Install project in editable mode if not already done
-# Check for uv tool, fallback to pip if not available
-if command -v uv &> /dev/null; then
-    echo "Using uv for package installation"
-    uv pip install -e .
-else
-    echo "uv not found, falling back to pip"
-    pip install -e .
-fi
+# Note: Package installation should be done once during environment setup,
+# not on every job run. If needed, install dependencies manually:
+# uv pip install -e . or pip install -e .
 
 # --- Validate Required Variables ---
 : ${CONTRAST:?ERROR: CONTRAST not set - required for group GLM analysis}

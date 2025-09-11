@@ -7,14 +7,31 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=2
 
-# --- Shell Setup ---
+# --- Environment Validation (BEFORE any usage) ---
 set -e # Exit if any command fails
 
-# Change to the directory where you are submitting the script from
-cd "$SLURM_SUBMIT_DIR"
+# Require PROJECT_ROOT for consistent execution context
+: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
+
+# Verify PROJECT_ROOT exists
+if [[ ! -d "$PROJECT_ROOT" ]]; then
+    echo "ERROR: PROJECT_ROOT directory does not exist: $PROJECT_ROOT"
+    exit 1
+fi
+
+# --- Shell Setup ---
+# Change to the project root directory for consistent execution context
+cd "$PROJECT_ROOT"
 
 # Ensure logs directory exists for output files
 mkdir -p logs
+
+# Verify config file exists
+if [[ ! -f "config/project_config.yaml" ]]; then
+    echo "ERROR: Config file not found: config/project_config.yaml"
+    echo "Make sure you're running from the project root directory"
+    exit 1
+fi
 
 # Activate your project's Python environment
 ml python/3.9
