@@ -850,11 +850,8 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         logging.info(f"  - choice_larger_later: {larger_later_count} trials")
         logging.info(f"  - Total choice trials: {smaller_sooner_count + larger_later_count}")
     
-    # CRITICAL FIX: Always update subject_data with processed events_df
-    # This ensures duration changes and other preprocessing are preserved
-    # even when choice column is missing
-    subject_data = subject_data.copy()
-    subject_data['events_df'] = events_df
+    # CRITICAL FIX: Defer subject_data copy until all updates are ready
+    # Will combine with run_numbers update below for efficiency
     
     # Define models to run based on available columns
     default_models = {
@@ -874,11 +871,21 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     # CRITICAL FIX: Safe GLM parameter access for model specifications
     glm_config = analysis_params.get('glm', {})
     model_specifications = glm_config.get('model_specifications', default_models)
+    
+    # CRITICAL FIX: Check for empty model specifications and provide clear error
+    if not model_specifications:
+        raise ValueError(f"No GLM models specified for subject {subject_id}. "
+                        f"Model specifications is empty: {model_specifications}. "
+                        f"Check configuration or default model definitions.")
+    
     logging.info(f"Models to run: {list(model_specifications.keys())}")
     
-    # Update subject_data with converted run_numbers for consistency
+    # CRITICAL FIX: Single copy operation combining all subject_data updates
+    # Update with both processed events_df and converted run_numbers for efficiency
     subject_data = subject_data.copy()
-    subject_data['run_numbers'] = run_numbers_int
+    subject_data['events_df'] = events_df  # Include processed events with duration changes
+    subject_data['run_numbers'] = run_numbers_int  # Include converted integer run numbers
+    logging.info("Updated subject_data with processed events and integer run numbers")
     
     # Run each model separately
     successful_models = []
