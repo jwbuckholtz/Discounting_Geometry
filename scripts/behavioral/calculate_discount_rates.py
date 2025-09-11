@@ -310,10 +310,13 @@ def process_subject_data(subject_id: str, onsets_dir: Path, derivatives_dir: Pat
         else:
             unnumbered_files.append(f)
 
-    # Check for duplicate (session, run) pairs *after* parsing all of them
-    if len(run_session_pairs) != len(set(run_session_pairs)):
-        duplicates = [pair for pair in set(run_session_pairs) if run_session_pairs.count(pair) > 1]
-        raise ValueError(f"Duplicate (session, run) combinations detected for {subject_id}: {duplicates}. Please check filenames.")
+    # Check for duplicate run numbers - be strict about conflicts
+    # Any run number should only appear once per subject, regardless of session
+    run_ids_only = [run_id for _, run_id in run_session_pairs]
+    if len(run_ids_only) != len(set(run_ids_only)):
+        duplicates = [run_id for run_id in set(run_ids_only) if run_ids_only.count(run_id) > 1]
+        conflicting_files = [f.name for f in event_files if any(f'_run-{dup:02d}_' in f.name or f.name.endswith(f'_run-{dup:02d}_events.tsv') for dup in duplicates)]
+        raise ValueError(f"Duplicate run numbers {duplicates} detected for {subject_id} in files: {conflicting_files}. Please check filenames.")
 
     # Process explicitly numbered files
     for f, run_id in explicit_runs.items():

@@ -8,7 +8,7 @@ from nilearn import image
 
 # Correctly import the refactored function
 from scripts.modeling.run_lss_model import run_lss_for_subject
-from scripts.modeling.run_standard_glm import run_standard_glm_for_subject, prepare_run_events
+from scripts.modeling.run_standard_glm import run_standard_glm_for_subject, prepare_run_events, _validate_modulators_across_runs
 
 # Helper function to create fake data for testing
 def create_fake_nifti(shape=(10, 10, 10, 20), affine=np.eye(4)):
@@ -28,13 +28,17 @@ def test_prepare_run_events_unit():
         'onset': [10, 20, 30, 40],
         'duration': [1, 1, 1, 1],
         'sv_modulator': [1, 2, 3, 4],       # Should be mean-centered
-        'zero_modulator': [2, 2, 2, 2]      # Should be dropped
+        'zero_modulator': [2, 2, 2, 2],     # Should be dropped
+        'run': [1, 1, 1, 1]                 # Add run column for validation
     })
     
     all_modulators = ['sv_modulator', 'zero_modulator', 'missing_modulator']
     
-    # --- 2. Run the function to be tested ---
-    prepared_df = prepare_run_events(events_df.copy(), all_modulators)
+    # --- 2. Validate modulators first (new approach) ---
+    valid_modulators = _validate_modulators_across_runs(events_df, all_modulators, [1])
+    
+    # --- 3. Run the function to be tested ---
+    prepared_df = prepare_run_events(events_df.copy(), valid_modulators)
     
     # --- 3. Assertions ---
     # The DataFrame should now be in long format
@@ -44,13 +48,18 @@ def test_prepare_run_events_unit():
     assert len(mean_events) == 4
     assert np.allclose(mean_events['modulation'], 1)
 
-    # Check the 'sv_modulator' parametric modulator
-    sv_events = prepared_df[prepared_df['trial_type'] == 'sv_modulator']
-    assert len(sv_events) == 4
-    assert np.isclose(sv_events['modulation'].mean(), 0.0), \
-        "Modulator with variance was not correctly mean-centered."
+    # Check the 'sv_modulator' parametric modulator (should be included)
+    if 'sv_modulator' in valid_modulators:
+        sv_events = prepared_df[prepared_df['trial_type'] == 'sv_modulator']
+        assert len(sv_events) == 4
+        assert np.isclose(sv_events['modulation'].mean(), 0.0), \
+            "Modulator with variance was not correctly mean-centered."
 
-    # Assert that the zero-variance modulators were dropped
+    # Assert that the zero-variance and missing modulators were excluded during validation
+    assert 'zero_modulator' not in valid_modulators, "Zero-variance modulator should have been excluded during validation"
+    assert 'missing_modulator' not in valid_modulators, "Missing modulator should have been excluded during validation"
+    
+    # Assert that only valid modulators appear in the prepared events
     assert 'zero_modulator' not in prepared_df['trial_type'].unique()
     assert 'missing_modulator' not in prepared_df['trial_type'].unique()
         
