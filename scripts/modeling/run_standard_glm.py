@@ -262,6 +262,19 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
 
+    # CRITICAL FIX: Create run-indexed dictionaries to prevent data misalignment
+    # Instead of relying on list ordering, use run numbers as keys
+    if len(bold_imgs) != len(run_numbers) or len(confounds_dfs) != len(run_numbers):
+        raise ValueError(f"Data misalignment: {len(bold_imgs)} BOLD images, "
+                        f"{len(confounds_dfs)} confound files, but {len(run_numbers)} run numbers. "
+                        f"All lists must have the same length and matching order.")
+    
+    # Create dictionaries keyed by run number for safe access
+    bold_imgs_by_run = {run_num: bold_imgs[i] for i, run_num in enumerate(run_numbers)}
+    confounds_by_run = {run_num: confounds_dfs[i] for i, run_num in enumerate(run_numbers)}
+    
+    logging.info(f"Created run-indexed dictionaries for {len(run_numbers)} runs: {run_numbers}")
+
     logging.info(f"--- Running {model_name} GLM for {subject_id} with regressors: {target_regressors} ---")
     
     # Create model-specific output directory
@@ -349,8 +362,17 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     valid_bold_imgs = []
     valid_confounds_dfs = []
     valid_run_numbers = []
-    
-    for i, run_number in enumerate(run_numbers):
+
+    for run_number in run_numbers:
+        # CRITICAL FIX: Verify run data exists before processing
+        if run_number not in bold_imgs_by_run:
+            logging.error(f"Run {run_number} missing BOLD image - skipping")
+            continue
+        
+        if run_number not in confounds_by_run:
+            logging.error(f"Run {run_number} missing confounds - skipping")
+            continue
+            
         run_events_df = events_df[events_df['run'] == run_number].copy()
         
         # Skip runs with no events (already identified)
@@ -378,9 +400,14 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         last_onset = run_events_df['onset'].max()
         
         if explicit_start is not None:
-            # Use explicit run start time from config (most reliable)
-            logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
-            run_events_df['onset'] -= explicit_start
+            # CRITICAL FIX: Ensure start time is numeric before arithmetic operations
+            try:
+                explicit_start_numeric = float(explicit_start)
+                logging.info(f"Using explicit start time {explicit_start_numeric}s for run {run_number}")
+                run_events_df['onset'] -= explicit_start_numeric
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Run {run_number}: Cannot convert start time '{explicit_start}' to numeric: {e}. "
+                               f"Start times must be numeric values (seconds).")
         else:
             # CRITICAL: Much stricter detection of session-relative timing
             # Any onset pattern that could be session-relative must be explicitly configured
@@ -429,8 +456,9 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
-        valid_bold_imgs.append(bold_imgs[i])
-        valid_confounds_dfs.append(confounds_dfs[i])
+        # CRITICAL FIX: Use run-indexed dictionaries instead of enumerate index
+        valid_bold_imgs.append(bold_imgs_by_run[run_number])
+        valid_confounds_dfs.append(confounds_by_run[run_number])
         valid_run_numbers.append(run_number)
 
     if not events_per_run:
@@ -609,10 +637,28 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     Runs multiple separate GLM models to avoid multicollinearity issues.
     Each model focuses on a specific regressor of interest.
     """
-    analysis_params = params['analysis_params']
+    # CRITICAL FIX: Safe access to analysis_params with informative error
+    analysis_params = params.get('analysis_params')
+    if analysis_params is None:
+        raise ValueError(f"Missing 'analysis_params' in params. "
+                        f"Available keys: {list(params.keys())}")
     
     subject_id = subject_data['subject_id']
     logging.info(f"=== Running separate GLM models for {subject_id} ===")
+    
+    # CRITICAL FIX: Ensure run_numbers are integers for consistent comparison
+    # Convert subject_data run_numbers to match events_df run column type
+    run_numbers = subject_data.get('run_numbers', [])
+    if not run_numbers:
+        raise ValueError("No run_numbers found in subject_data")
+    
+    try:
+        # Convert to integers if they aren't already
+        run_numbers_int = [int(run_num) for run_num in run_numbers]
+        logging.info(f"Converted run_numbers to integers: {run_numbers_int}")
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Cannot convert run_numbers to integers: {e}. "
+                        f"Run numbers: {run_numbers}")
     
     # Process events DataFrame for modeling improvements
     events_df = subject_data['events_df'].copy()
@@ -733,6 +779,10 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     glm_config = analysis_params.get('glm', {})
     model_specifications = glm_config.get('model_specifications', default_models)
     logging.info(f"Models to run: {list(model_specifications.keys())}")
+    
+    # Update subject_data with converted run_numbers for consistency
+    subject_data = subject_data.copy()
+    subject_data['run_numbers'] = run_numbers_int
     
     # Run each model separately
     successful_models = []

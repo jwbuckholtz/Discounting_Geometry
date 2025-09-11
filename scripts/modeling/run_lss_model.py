@@ -13,6 +13,12 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     """
     Runs the LSS modeling to estimate single-trial beta maps from one or more runs.
     """
+    # CRITICAL FIX: Safe access to analysis_params with informative error
+    analysis_params = params.get('analysis_params')
+    if analysis_params is None:
+        raise ValueError(f"Missing 'analysis_params' in params for LSS. "
+                        f"Available keys: {list(params.keys())}")
+    
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
     events_df = subject_data['events_df']
