@@ -9,9 +9,10 @@
 #SBATCH --ntasks=1                        # 1 task
 #SBATCH --cpus-per-task=2                 # 2 CPUs
 # --- SBATCH Array Directive ---
-# Set a high-level upper bound for the number of subjects.
-# The script will exit gracefully if the task ID is out of bounds.
-#SBATCH --array=0-199
+# Set array bounds to match the actual number of subjects (0-102 for 103 subjects)
+# To determine correct bounds, run: ./slurm/get_subject_count.sh
+# This prevents unnecessary out-of-bounds task submissions and wasted compute resources
+#SBATCH --array=0-102
 
 # --- Shell Setup ---
 # Change to the directory where you are submitting the script from
