@@ -2,6 +2,7 @@ import argparse
 import pandas as pd
 import numpy as np
 import nibabel as nib
+import os
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any, List, Optional
@@ -41,7 +42,11 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         if df is None or df.empty:
             # CRITICAL FIX: Create zero-filled DataFrame to ensure design matrix consistency
             # All runs must have the same confound structure for valid contrast computation
-            bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
+            bold_entry = bold_imgs[i]
+            if isinstance(bold_entry, (str, os.PathLike)):
+                bold_img = nib.load(bold_entry)
+            else:
+                bold_img = bold_entry
             n_volumes = bold_img.shape[-1]
             
             # Create zero-filled DataFrame with all unified columns
@@ -55,8 +60,12 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
             harmonized_df = df.copy()
             
             # CRITICAL: Verify confound row count matches BOLD volumes
-            # Load BOLD image to get volume count (bold_imgs contains file paths)
-            bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
+            # Load BOLD image to get volume count (bold_imgs may contain paths, Path objects, or loaded images)
+            bold_entry = bold_imgs[i]
+            if isinstance(bold_entry, (str, os.PathLike)):
+                bold_img = nib.load(bold_entry)
+            else:
+                bold_img = bold_entry
             n_volumes = bold_img.shape[-1]
             n_confound_rows = len(harmonized_df)
             
@@ -139,9 +148,12 @@ def _calculate_vif(X: np.ndarray, feature_names: list) -> Dict[str, float]:
             vif = 1 / (1 - r2) if r2 < 0.999 else float('inf')
             vif_dict[feature] = vif
             
-        except Exception:
-            # If regression fails, assume no multicollinearity
-            vif_dict[feature] = 1.0
+        except Exception as e:
+            # CRITICAL FIX: Log regression failure and set VIF to infinity to signal potential issues
+            # Don't mask potential multicollinearity with optimistic VIF=1.0
+            logging.warning(f"VIF regression failed for feature '{feature}': {e}")
+            logging.warning(f"Setting VIF to infinity to signal potential multicollinearity issue")
+            vif_dict[feature] = float('inf')
     
     return vif_dict
 
@@ -281,11 +293,14 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     output_dir = derivatives_dir / 'standard_glm' / subject_id / f'model-{model_name}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    analysis_params = params['analysis_params']
+    # CRITICAL FIX: Safe access to analysis_params with informative error
+    analysis_params = params.get('analysis_params')
+    if analysis_params is None:
+        raise ValueError(f"Missing 'analysis_params' in params for model {model_name}. "
+                        f"Available keys: {list(params.keys())}")
     
     # CRITICAL FIX: Intelligent CPU allocation for HPC environments
     # Avoid oversubscribing CPUs beyond SLURM allocation
-    import os
     n_jobs = -1  # Default: use all cores
     
     # Check for SLURM environment and respect CPU allocation
