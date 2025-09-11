@@ -22,9 +22,9 @@ ml python/3.9
 source .venv/bin/activate
 
 # --- Command ---
+# Arguments: subject_id (positional), then flags
 python scripts/mvpa/run_decoding_analysis.py \
     $SUBJECT_ID \
-    $DERIVATIVES_DIR \
     --target $TARGET \
     --config $CONFIG_FILE \
     --env $ENV

@@ -46,6 +46,7 @@ echo "SLURM Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Processing Subject: $CURRENT_SUBJECT"
 
 # Run the Python script for the current subject.
-python scripts/modeling/run_standard_glm.py --subject $CURRENT_SUBJECT --env hpc
+# Arguments: config_path env subject_id
+python scripts/modeling/run_standard_glm.py config/project_config.yaml hpc $CURRENT_SUBJECT
 
 echo "--- Finished GLM for $CURRENT_SUBJECT ---"

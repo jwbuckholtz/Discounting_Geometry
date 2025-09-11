@@ -17,7 +17,8 @@ source .venv/bin/activate
 
 # --- Job Execution ---
 echo "Running standard GLM for subject: $SUBJECT_ID"
+# Arguments: config_path env subject_id (positional)
 ./.venv/bin/python scripts/modeling/run_standard_glm.py \
-    --config "$CONFIG_FILE" \
-    --env "$ENV" \
-    --subject "$SUBJECT_ID"
+    "$CONFIG_FILE" \
+    "$ENV" \
+    "$SUBJECT_ID"

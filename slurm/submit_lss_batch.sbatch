@@ -51,6 +51,7 @@ echo "SLURM Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Processing Subject: $CURRENT_SUBJECT"
 
 # Run the Python script for the current subject
-python scripts/modeling/run_lss_model.py --subject $CURRENT_SUBJECT --env hpc
+# Arguments: --config config_path --env environment --subject subject_id
+python scripts/modeling/run_lss_model.py --config config/project_config.yaml --env hpc --subject $CURRENT_SUBJECT
 
 echo "--- Finished LSS for $CURRENT_SUBJECT ---"
