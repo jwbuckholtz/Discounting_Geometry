@@ -23,6 +23,9 @@ fi
 # --- Calculate Subject Count ---
 cd "$PROJECT_ROOT"
 
+# Ensure logs directory exists before submission
+mkdir -p logs
+
 # Count subjects dynamically
 SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -type d -name "sub-*" | wc -l)
 

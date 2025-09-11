@@ -10,10 +10,11 @@ set -e  # Exit immediately if any command fails
 #SBATCH --ntasks=1                        # 1 task
 #SBATCH --cpus-per-task=2                 # 2 CPUs
 # --- SBATCH Array Directive ---
-# Set array bounds to match the actual number of subjects (0-102 for 103 subjects)
-# To determine correct bounds, run: ./slurm/get_subject_count.sh
-# This prevents unnecessary out-of-bounds task submissions and wasted compute resources
-#SBATCH --array=0-102
+# NOTE: Array bounds should be passed dynamically via submission wrapper:
+# Use: ./slurm/submit_glm_array_dynamic.sh (recommended)
+# Or:  sbatch --array=0-N slurm/submit_glm_batch.sbatch
+# Hard-coded bounds removed to prevent stale values
+# #SBATCH --array=0-102  # REMOVED: Use dynamic submission instead
 
 # --- Environment Validation (BEFORE any usage) ---
 # Require all paths via environment variables for portability

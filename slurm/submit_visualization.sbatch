@@ -15,19 +15,15 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Validate required environment variables
 : "${SUBJECT_ID:?ERROR: SUBJECT_ID not set - required for subject processing}"
 : "${ROI_DIR:?ERROR: ROI_DIR not set - required for ROI directory path}"
-: "${CONFIG_FILE:="config/project_config.yaml"}"
-: "${ENV:="hpc"}"
 
-# Verify paths exist
+# Verify ROI directory exists
 if [[ ! -d "$ROI_DIR" ]]; then
     echo "ERROR: ROI directory does not exist: $ROI_DIR"
     exit 1
 fi
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "ERROR: Config file does not exist: $CONFIG_FILE"
-    exit 1
-fi
+# Note: CONFIG_FILE and ENV are not used by the visualization script
+# The visualization script only requires SUBJECT_ID and ROI_DIR
 
 # --- Environment Setup ---
 # Require PROJECT_ROOT for consistent execution context
@@ -53,8 +49,6 @@ echo "--- Job Details ---"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Subject ID: $SUBJECT_ID"
 echo "ROI Directory: $ROI_DIR"
-echo "Config File: $CONFIG_FILE"
-echo "Environment: $ENV"
 echo "--------------------"
 
 # --- Activate Conda/Venv Environment ---

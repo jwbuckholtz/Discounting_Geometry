@@ -11,10 +11,11 @@ set -e  # Exit immediately if any command fails
 #SBATCH --cpus-per-task=2
 
 # --- Setup ---
-# Set array bounds to match the actual number of subjects (0-102 for 103 subjects)  
-# To determine correct bounds, run: ./slurm/get_subject_count.sh
-# This prevents unnecessary out-of-bounds task submissions and wasted compute resources
-#SBATCH --array=0-102
+# NOTE: Array bounds should be passed dynamically via submission wrapper:
+# Use: ./slurm/submit_lss_array_dynamic.sh (recommended)
+# Or:  sbatch --array=0-N slurm/submit_lss_batch.sbatch
+# Hard-coded bounds removed to prevent stale values
+# #SBATCH --array=0-102  # REMOVED: Use dynamic submission instead
 
 # This command is crucial for SLURM job arrays. It makes sure that if the job is
 # requeued, it starts from the first task again.
