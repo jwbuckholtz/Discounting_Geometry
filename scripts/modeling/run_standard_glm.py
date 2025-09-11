@@ -194,9 +194,15 @@ def prepare_run_events(run_events_df: pd.DataFrame, valid_modulator_cols: list) 
     
     return final_events_df
 
-def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
+def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], model_name: str, target_regressors: List[str]) -> None:
     """
-    Runs a standard GLM with parametric modulators across one or more runs.
+    Runs a single GLM model with specified target regressors.
+    
+    Args:
+        subject_data: Subject data dictionary
+        params: Analysis parameters
+        model_name: Name of the model for output organization
+        target_regressors: List of regressors to include in this model
     """
     subject_id = subject_data['subject_id']
     bold_imgs = subject_data['bold_imgs']
@@ -205,8 +211,10 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
 
-    logging.info(f"--- Running Standard GLM for {subject_id} on {len(bold_imgs)} run(s) ---")
-    output_dir = derivatives_dir / 'standard_glm' / subject_id
+    logging.info(f"--- Running {model_name} GLM for {subject_id} with regressors: {target_regressors} ---")
+    
+    # Create model-specific output directory
+    output_dir = derivatives_dir / 'standard_glm' / subject_id / f'model-{model_name}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     analysis_params = params['analysis_params']
@@ -232,14 +240,17 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     if not runs_with_events:
         raise ValueError(f"No runs with events found for subject {subject_id}")
     
-    # --- Validate Modulators Only on Runs with Events ---
-    all_modulator_cols = analysis_params['glm']['parametric_modulators']
-    valid_modulator_cols = _validate_modulators_across_runs(events_df, all_modulator_cols, runs_with_events)
+    # --- Validate Target Regressors Only on Runs with Events ---
+    valid_modulator_cols = _validate_modulators_across_runs(events_df, target_regressors, runs_with_events)
     
-    if len(valid_modulator_cols) < len(all_modulator_cols):
-        dropped = set(all_modulator_cols) - set(valid_modulator_cols)
-        logging.info(f"Dropped modulators that were invalid across runs with events: {dropped}")
+    if len(valid_modulator_cols) < len(target_regressors):
+        dropped = set(target_regressors) - set(valid_modulator_cols)
+        logging.warning(f"Model {model_name}: Dropped invalid regressors: {dropped}")
     
+    if not valid_modulator_cols:
+        logging.warning(f"Model {model_name}: No valid regressors found - skipping")
+        return
+
     # --- Prepare Events for Each Valid Run ---
     events_per_run = []
     valid_bold_imgs = []
@@ -260,17 +271,13 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             logging.error(f"Run {run_number} missing required columns: {missing_required}, skipping")
             continue
             
-        # Explicit onset normalization based on run timing expectations
-        first_onset = run_events_df['onset'].min()
-        last_onset = run_events_df['onset'].max()
-        
-        # Check if we have explicit run start time information in the config
-        # For now, use a more conservative approach that preserves intentional timing
-        
         # Enhanced onset normalization with better heuristics and explicit timing support
         # Check if we have explicit run timing in the analysis parameters
         run_start_times = analysis_params.get('run_start_times', {})
         explicit_start = run_start_times.get(str(run_number))
+        
+        first_onset = run_events_df['onset'].min()
+        last_onset = run_events_df['onset'].max()
         
         if explicit_start is not None:
             # Use explicit run start time from config (most reliable)
@@ -280,11 +287,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             # Enhanced heuristic-based normalization
             onset_range = last_onset - first_onset
             
-            # Multiple criteria for detecting session-relative timing:
-            # 1. First onset > 300s (original criterion)
-            # 2. Large onset range suggesting session timing
-            # 3. First onset significantly larger than typical run duration
-            
+            # Multiple criteria for detecting session-relative timing
             needs_normalization = (
                 first_onset > 300 or  # Original criterion
                 (first_onset > 60 and onset_range < first_onset * 0.3) or  # Large start with compact range
@@ -311,8 +314,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         valid_bold_imgs.append(bold_imgs[i])
         valid_confounds_dfs.append(confounds_dfs[i])
         valid_run_numbers.append(run_number)
-    
-    # Check if we have any valid runs left
+
     if not events_per_run:
         raise ValueError(f"No valid runs with events found for subject {subject_id}")
         
@@ -357,12 +359,12 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
                     high_vif_regressors.append(f"{regressor}(VIF={vif:.2f})")
                     
             if high_vif_regressors:
-                logging.warning(f"High multicollinearity detected among task regressors: {', '.join(high_vif_regressors)}. "
+                logging.warning(f"Model {model_name}: High multicollinearity detected among task regressors: {', '.join(high_vif_regressors)}. "
                               "Consider orthogonalizing regressors or checking for redundant modulators.")
             else:
-                logging.info(f"VIF check passed for {len(task_regressors)} task regressors. Max VIF: {max(vif_values.values()):.2f}")
+                logging.info(f"Model {model_name}: VIF check passed for {len(task_regressors)} task regressors. Max VIF: {max(vif_values.values()):.2f}")
         else:
-            logging.info(f"Only {len(task_regressors)} task regressor(s) found - VIF check not applicable")
+            logging.info(f"Model {model_name}: Only {len(task_regressors)} task regressor(s) found - VIF check not applicable")
     
     # --- Enforce Design Matrix Consistency ---
     if len(glm.design_matrices_) > 1:
@@ -383,18 +385,18 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         
         # Enforce consistency - raise error if matrices differ
         if inconsistent_runs:
-            error_msg = f"Design matrix inconsistencies detected for {subject_id}:\n"
+            error_msg = f"Design matrix inconsistencies detected for {subject_id} model {model_name}:\n"
             for issue in inconsistent_runs:
                 error_msg += f"  Run {issue['run']}: missing={issue['missing']}, extra={issue['extra']}\n"
             error_msg += "This indicates problems with confound harmonization or event processing."
             raise ValueError(error_msg)
                     
         # Log the final design matrix structure
-        logging.info(f"Design matrices consistent across {len(glm.design_matrices_)} runs with {len(first_columns)} columns: {sorted(first_columns)}")
+        logging.info(f"Model {model_name}: Design matrices consistent across {len(glm.design_matrices_)} runs with {len(first_columns)} columns: {sorted(first_columns)}")
     else:
         # Single run case
         columns = set(glm.design_matrices_[0].columns)
-        logging.info(f"Single run design matrix has {len(columns)} columns: {sorted(columns)}")
+        logging.info(f"Model {model_name}: Single run design matrix has {len(columns)} columns: {sorted(columns)}")
 
     # --- Define and Compute Contrasts ---
     # Check for contrasts across ALL design matrices, not just the first one
@@ -405,50 +407,88 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     contrasts_to_compute = ['mean'] + valid_modulator_cols
     
     for contrast_name in contrasts_to_compute:
-        if contrast_name not in all_design_columns:
-            logging.warning(
-                f"Contrast '{contrast_name}' not found in any design matrix. Skipping."
-            )
-            continue
+        if contrast_name in all_design_columns:
+            logging.info(f"Model {model_name}: Computing contrast for '{contrast_name}'")
             
-        # Check if the contrast exists in ALL runs (required for valid contrast)
-        missing_in_runs = []
-        for i, design_matrix in enumerate(glm.design_matrices_):
-            if contrast_name not in design_matrix.columns:
-                missing_in_runs.append(i + 1)
-                
-        if missing_in_runs:
-            logging.warning(
-                f"Contrast '{contrast_name}' missing in run(s) {missing_in_runs}. Skipping."
-            )
-            continue
+            # Compute contrast
+            contrast_map = glm.compute_contrast(contrast_name, output_type='z_score')
             
-        # The regressor names are now directly the trial_type names
-        z_map = glm.compute_contrast(contrast_name, output_type='z_score')
+            # Save contrast map
+            contrast_path = output_dir / f'contrast-{contrast_name}_zmap.nii.gz'
+            contrast_map.to_filename(str(contrast_path))
+            logging.info(f"Model {model_name}: Saved contrast '{contrast_name}' to {contrast_path}")
+        else:
+            logging.warning(f"Model {model_name}: Contrast '{contrast_name}' not found in design matrix columns: {sorted(all_design_columns)}")
+    
+    logging.info(f"Model {model_name}: GLM analysis completed for {subject_id}")
+
+def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
+    """
+    Runs multiple separate GLM models to avoid multicollinearity issues.
+    Each model focuses on a specific regressor of interest.
+    """
+    analysis_params = params['analysis_params']
+    
+    # Define the separate models to run
+    model_specifications = analysis_params['glm'].get('model_specifications', {
+        'choice': ['choice'],
+        'value_chosen': ['SVchosen'],
+        'value_unchosen': ['SVunchosen'], 
+        'value_difference': ['SVdiff']
+    })
+    
+    subject_id = subject_data['subject_id']
+    logging.info(f"=== Running separate GLM models for {subject_id} ===")
+    logging.info(f"Models to run: {list(model_specifications.keys())}")
+    
+    # Convert choice values to numeric if needed
+    events_df = subject_data['events_df'].copy()
+    if 'choice' in events_df.columns and events_df['choice'].dtype == 'object':
+        choice_mapping = {'smaller_sooner': 0, 'larger_later': 1}
+        events_df['choice'] = events_df['choice'].map(choice_mapping)
+        logging.info("Converted choice column from text to numeric (0=smaller_sooner, 1=larger_later)")
         
-        contrast_filename = output_dir / f"contrast-{contrast_name}_zmap.nii.gz"
-        z_map.to_filename(contrast_filename)
-        logging.info(f"Saved z-map to: {contrast_filename.resolve()}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run standard GLM for a single subject.")
-    parser.add_argument('--config', type=str, default='config/project_config.yaml', help='Path to the project config file')
-    parser.add_argument('--env', type=str, required=True, choices=['local', 'hpc'], help='Environment to run on')
-    parser.add_argument('--subject', type=str, required=True, help='The subject ID to process')
-    args = parser.parse_args()
-
-    setup_logging()
-
-    # Load the full config
-    config = load_config(args.config)
+        # Update subject_data with the converted events
+        subject_data = subject_data.copy()
+        subject_data['events_df'] = events_df
     
-    # Load all data for the subject using the new, definitive utility function
-    subject_data = load_modeling_data(args.config, args.env, args.subject)
+    # Run each model separately
+    successful_models = []
+    failed_models = []
     
-    # Pass the full config to the analysis function
-    run_standard_glm_for_subject(subject_data, config)
-
+    for model_name, target_regressors in model_specifications.items():
+        try:
+            run_single_model_glm(subject_data, params, model_name, target_regressors)
+            successful_models.append(model_name)
+        except Exception as e:
+            logging.error(f"Model {model_name} failed: {e}")
+            failed_models.append((model_name, str(e)))
+    
+    # Summary
+    logging.info(f"=== GLM Analysis Summary for {subject_id} ===")
+    logging.info(f"Successful models ({len(successful_models)}): {successful_models}")
+    if failed_models:
+        logging.warning(f"Failed models ({len(failed_models)}): {[name for name, _ in failed_models]}")
+        for name, error in failed_models:
+            logging.warning(f"  {name}: {error}")
+    
+    if not successful_models:
+        raise ValueError(f"All GLM models failed for subject {subject_id}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run standard GLM analysis for a subject")
+    parser.add_argument('config_path', help='Path to configuration file')
+    parser.add_argument('env', help='Environment (e.g., local, hpc)')
+    parser.add_argument('subject_id', help='Subject ID to process')
+    
+    args = parser.parse_args()
+    
+    # Load configuration and setup logging
+    config = load_config(args.config_path, args.env)
+    setup_logging(config)
+    
+    # Load subject data
+    subject_data = load_modeling_data(args.config_path, args.env, args.subject_id)
+    
+    # Run GLM analysis
+    run_standard_glm_for_subject(subject_data, config)

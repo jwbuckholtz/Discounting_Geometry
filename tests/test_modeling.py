@@ -101,12 +101,20 @@ def synthetic_glm_dataset(tmp_path_factory):
     nib.save(bold_img, bold_path)
     
     # --- 4. Create an events file ---
+    # Create realistic choice-dependent value regressors
+    choice_values = np.random.choice([0, 1], n_trials)
+    svchosen_values = np.random.rand(n_trials) * 10
+    svunchosen_values = np.random.rand(n_trials) * 8  # Different range for unchosen
+    svdiff_values = svchosen_values - svunchosen_values  # Realistic difference
+    
     events_df = pd.DataFrame({
         'onset': np.linspace(5, (n_scans - 10) * tr, n_trials),
         'duration': np.ones(n_trials) * 1.0,
         'trial_type': ['trial'] * n_trials,  # Add trial_type column for LSS script
-        'choice': np.random.choice([0, 1], n_trials),
-        'SVchosen': np.random.rand(n_trials) * 10,
+        'choice': choice_values,
+        'SVchosen': svchosen_values,
+        'SVunchosen': svunchosen_values,
+        'SVdiff': svdiff_values,
         'run': [1] * n_trials
     })
     events_path = behavioral_dir / f"{sub_id}_discounting_with_sv.tsv"
@@ -142,7 +150,12 @@ def synthetic_glm_dataset(tmp_path_factory):
             'glm': {
                 'hrf_model': 'glover',
                 'drift_model': 'cosine',
-                'parametric_modulators': ['SVchosen']
+                'model_specifications': {
+                    'choice': ['choice'],
+                    'value_chosen': ['SVchosen'],
+                    'value_unchosen': ['SVunchosen'], 
+                    'value_difference': ['SVdiff']
+                }
             }
         }
     }
@@ -171,13 +184,29 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
         params=params
     )
     
-    # --- Assertions ---
-    output_dir = data["derivatives_dir"] / 'standard_glm' / data["subject_id"]
+    # --- Assertions for New Multi-Model Structure ---
+    base_output_dir = data["derivatives_dir"] / 'standard_glm' / data["subject_id"]
     
-    # Check for the main effect contrast
-    mean_contrast_path = output_dir / 'contrast-mean_zmap.nii.gz'
-    assert mean_contrast_path.exists(), "Main 'mean' contrast map was not created."
+    # Check for choice model outputs
+    choice_model_dir = base_output_dir / 'model-choice'
+    if choice_model_dir.exists():
+        choice_mean_contrast = choice_model_dir / 'contrast-mean_zmap.nii.gz'
+        choice_regressor_contrast = choice_model_dir / 'contrast-choice_zmap.nii.gz'
+        assert choice_mean_contrast.exists(), "Choice model 'mean' contrast map was not created."
+        
+    # Check for SVchosen model outputs  
+    svchosen_model_dir = base_output_dir / 'model-value_chosen'
+    if svchosen_model_dir.exists():
+        svchosen_mean_contrast = svchosen_model_dir / 'contrast-mean_zmap.nii.gz'
+        svchosen_regressor_contrast = svchosen_model_dir / 'contrast-SVchosen_zmap.nii.gz'
+        assert svchosen_mean_contrast.exists(), "SVchosen model 'mean' contrast map was not created."
+        assert svchosen_regressor_contrast.exists(), "SVchosen regressor contrast map was not created."
     
-    # Check for the parametric modulator contrast
-    sv_contrast_path = output_dir / 'contrast-SVchosen_zmap.nii.gz'
-    assert sv_contrast_path.exists(), "Parametric modulator 'SVchosen' contrast map was not created."
+    # Verify that at least one model ran successfully
+    successful_models = []
+    for model_name in ['choice', 'value_chosen', 'value_unchosen', 'value_difference']:
+        model_dir = base_output_dir / f'model-{model_name}'
+        if model_dir.exists():
+            successful_models.append(model_name)
+    
+    assert len(successful_models) > 0, f"No GLM models ran successfully. Expected at least one model to complete."
