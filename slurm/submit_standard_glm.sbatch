@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e  # Exit immediately if any command fails
 #
 #SBATCH --job-name=standard_glm
 #SBATCH --output=logs/standard_glm_%j_%x.out
@@ -9,6 +8,9 @@ set -e  # Exit immediately if any command fails
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=4G
 #SBATCH --time=01:00:00
+
+# --- Script Initialization ---
+set -e  # Exit immediately if any command fails
 
 # --- Environment Setup ---
 # Require PROJECT_ROOT for consistent execution context
