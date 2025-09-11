@@ -104,6 +104,7 @@ def synthetic_glm_dataset(tmp_path_factory):
     events_df = pd.DataFrame({
         'onset': np.linspace(5, (n_scans - 10) * tr, n_trials),
         'duration': np.ones(n_trials) * 1.0,
+        'trial_type': ['trial'] * n_trials,  # Add trial_type column for LSS script
         'choice': np.random.choice([0, 1], n_trials),
         'SVchosen': np.random.rand(n_trials) * 10,
         'run': [1] * n_trials
