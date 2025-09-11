@@ -21,8 +21,8 @@ set -e  # Exit immediately if any command fails
 #SBATCH --requeue
 
 # --- Shell Setup ---
-# Change to the directory where you are submitting the script from
-cd "$SLURM_SUBMIT_DIR"
+# Change to the project root directory for consistent execution context
+cd "$PROJECT_ROOT"
 
 # Ensure logs directory exists for output files
 mkdir -p logs
