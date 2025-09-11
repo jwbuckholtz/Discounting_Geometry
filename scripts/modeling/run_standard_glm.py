@@ -45,6 +45,37 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         else:
             harmonized_df = df.copy()
             
+            # CRITICAL: Verify confound row count matches BOLD volumes
+            # Load BOLD image to get volume count (bold_imgs contains file paths)
+            import nibabel as nib
+            bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
+            n_volumes = bold_img.shape[-1]
+            n_confound_rows = len(harmonized_df)
+            
+            if n_confound_rows != n_volumes:
+                logging.error(f"MISMATCH: Run {i+1} confounds have {n_confound_rows} rows but BOLD has {n_volumes} volumes")
+                
+                if n_confound_rows < n_volumes:
+                    # Pad with zeros if confounds are shorter
+                    missing_rows = n_volumes - n_confound_rows
+                    logging.warning(f"Padding run {i+1} confounds with {missing_rows} zero-filled rows")
+                    
+                    # Create padding DataFrame with same columns
+                    padding_data = pd.DataFrame(
+                        data=np.zeros((missing_rows, len(harmonized_df.columns))),
+                        columns=harmonized_df.columns
+                    )
+                    harmonized_df = pd.concat([harmonized_df, padding_data], ignore_index=True)
+                    
+                elif n_confound_rows > n_volumes:
+                    # Truncate if confounds are longer
+                    logging.warning(f"Truncating run {i+1} confounds from {n_confound_rows} to {n_volumes} rows")
+                    harmonized_df = harmonized_df.iloc[:n_volumes]
+                
+                # Verify fix
+                assert len(harmonized_df) == n_volumes, f"Failed to align confounds for run {i+1}"
+                logging.info(f"Successfully aligned run {i+1} confounds to {n_volumes} volumes")
+            
             # Add missing columns with zeros only for runs that have confounds
             for col in unified_columns:
                 if col not in harmonized_df.columns:
@@ -280,7 +311,7 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             logging.error(f"Run {run_number} missing required columns: {missing_required}, skipping")
             continue
             
-        # Conservative onset handling with preference for explicit timing
+        # STRICT onset handling - require explicit timing for session-relative data
         # Check if we have explicit run timing in the analysis parameters
         run_start_times = analysis_params.get('run_start_times', {})
         explicit_start = run_start_times.get(str(run_number))
@@ -293,32 +324,34 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
             run_events_df['onset'] -= explicit_start
         else:
-            # CONSERVATIVE approach: avoid heuristic normalization that may misalign events
-            # Only normalize in very obvious cases of session-relative timing
+            # CRITICAL: Detect potential session-relative timing and require explicit correction
+            potentially_session_relative = first_onset > 30  # Even 30s could be session-relative
             
-            # Much more conservative criteria to prevent BOLD misalignment
-            definitely_session_relative = (
-                first_onset > 1800  # > 30 min - definitely session-relative
-            )
-            
-            if definitely_session_relative:
-                logging.info(f"Normalizing clearly session-relative onsets for run {run_number} "
-                           f"(first onset: {first_onset:.1f}s - definitely session timing)")
-                run_events_df['onset'] -= first_onset
+            if potentially_session_relative:
+                # Issue a strong warning about potential misalignment
+                logging.error(f"CRITICAL: Run {run_number} onsets start at {first_onset:.1f}s which may be "
+                             f"session-relative timing. This could cause BOLD misalignment!")
+                logging.error(f"REQUIRED: Add explicit 'run_start_times' to analysis_params in config:")
+                logging.error(f"  analysis_params:")
+                logging.error(f"    run_start_times:")
+                logging.error(f"      '{run_number}': <actual_run_start_time_in_seconds>")
+                
+                # For very large values, abort rather than guess
+                if first_onset > 300:  # 5+ minutes is almost certainly session-relative
+                    raise ValueError(f"Run {run_number} has onsets starting at {first_onset:.1f}s, "
+                                   f"which is almost certainly session-relative timing. "
+                                   f"Add explicit 'run_start_times' to config to proceed safely.")
+                else:
+                    # For moderate values, preserve but warn heavily
+                    logging.warning(f"Preserving potentially session-relative onsets for run {run_number}. "
+                                   f"Add explicit timing to config to ensure BOLD alignment.")
             else:
-                # Preserve original timing - safer approach
-                logging.info(f"Preserving original onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
+                # Onsets start near zero - likely already normalized
+                logging.info(f"Preserving run-relative onsets for run {run_number} "
+                           f"(first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
                 
-                # Provide guidance for explicit timing
-                if first_onset > 60:  # Could be session-relative but not certain
-                    logging.warning(f"Run {run_number} onsets start at {first_onset:.1f}s - "
-                                  "this may be session-relative timing. Consider adding explicit 'run_start_times' "
-                                  "to analysis_params in config to ensure proper BOLD alignment")
-                
-            # Always provide guidance on explicit timing when not available
-            if 'run_start_times' not in analysis_params:
-                logging.info("RECOMMENDATION: Add 'run_start_times' to analysis_params in config "
-                           "for precise timing control and guaranteed BOLD alignment")
+            # Always provide explicit guidance
+            logging.info("BEST PRACTICE: Add 'run_start_times' to analysis_params for guaranteed alignment:")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)

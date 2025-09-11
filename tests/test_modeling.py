@@ -156,6 +156,9 @@ def synthetic_glm_dataset(tmp_path_factory):
                     'value_unchosen': ['SVunchosen'], 
                     'value_difference': ['SVdiff']
                 }
+            },
+            'run_start_times': {
+                '1': 0  # Explicit run timing for test
             }
         }
     }
