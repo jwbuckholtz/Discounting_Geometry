@@ -106,6 +106,7 @@ def synthetic_glm_dataset(tmp_path_factory):
     svchosen_values = np.random.rand(n_trials) * 10
     svunchosen_values = np.random.rand(n_trials) * 8  # Different range for unchosen
     svdiff_values = svchosen_values - svunchosen_values  # Realistic difference
+    large_amount_values = np.random.rand(n_trials) * 20  # Large amount regressor
     
     events_df = pd.DataFrame({
         'onset': np.linspace(5, (n_scans - 10) * tr, n_trials),
@@ -115,6 +116,7 @@ def synthetic_glm_dataset(tmp_path_factory):
         'SVchosen': svchosen_values,
         'SVunchosen': svunchosen_values,
         'SVdiff': svdiff_values,
+        'large_amount': large_amount_values,
         'run': [1] * n_trials
     })
     events_path = behavioral_dir / f"{sub_id}_discounting_with_sv.tsv"
@@ -154,7 +156,8 @@ def synthetic_glm_dataset(tmp_path_factory):
                     'choice': ['choice'],
                     'value_chosen': ['SVchosen'],
                     'value_unchosen': ['SVunchosen'], 
-                    'value_difference': ['SVdiff']
+                    'value_difference': ['SVdiff'],
+                    'large_amount': ['large_amount']
                 }
             },
             'run_start_times': {
@@ -207,7 +210,7 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     
     # Verify that at least one model ran successfully
     successful_models = []
-    for model_name in ['choice', 'value_chosen', 'value_unchosen', 'value_difference']:
+    for model_name in ['choice', 'value_chosen', 'value_unchosen', 'value_difference', 'large_amount']:
         model_dir = base_output_dir / f'model-{model_name}'
         if model_dir.exists():
             successful_models.append(model_name)

@@ -534,7 +534,8 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         'choice': ['choice'],
         'value_chosen': ['SVchosen'],
         'value_unchosen': ['SVunchosen'], 
-        'value_difference': ['SVdiff']
+        'value_difference': ['SVdiff'],
+        'large_amount': ['large_amount']
     })
     
     subject_id = subject_data['subject_id']

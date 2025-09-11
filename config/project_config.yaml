@@ -52,6 +52,14 @@ analysis_params:
       - SVunchosen
       - SVsum
       - SVdiff
+      - large_amount
+    # Modern model specifications: separate models to avoid multicollinearity
+    model_specifications:
+      choice: ['choice']
+      value_chosen: ['SVchosen']
+      value_unchosen: ['SVunchosen']
+      value_difference: ['SVdiff']
+      large_amount: ['large_amount']
   
   rsa:
     searchlight_radius: 8
