@@ -1,11 +1,12 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #
 # Helper script to determine the number of subjects for SLURM array jobs
 # This ensures array bounds match the actual subject count
 #
 
-# Path to behavioral data (adjust if needed)
-BEHAVIORAL_DIR="/oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/"
+# Path to behavioral data (parameterized for portability)
+BEHAVIORAL_DIR="${BEHAVIORAL_DIR:-/oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral}"
 
 # Check if directory exists
 if [ ! -d "$BEHAVIORAL_DIR" ]; then

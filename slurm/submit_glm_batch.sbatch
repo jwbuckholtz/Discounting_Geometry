@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #
 #SBATCH --job-name=glm_batch
 #SBATCH --output=logs/glm_batch_%A_%a.out  # Standard output log, %A=job ID, %a=task ID
@@ -19,15 +20,23 @@
 cd $SLURM_SUBMIT_DIR
 
 # --- Environment Setup ---
+# Parameterized paths for portability
+PROJECT_ROOT="${PROJECT_ROOT:-/home/users/joshuawb/Code/Discounting_Geometry}"
+BEHAVIORAL_DIR="${BEHAVIORAL_DIR:-/oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral}"
+
+# Validate required environment variables
+: ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set}
+: ${BEHAVIORAL_DIR:?ERROR: BEHAVIORAL_DIR not set}
+
 # Load the base Python module. This is necessary for the virtual environment to work.
 module load python/3.9.0
 
 # Activate your Python environment.
-source /home/users/joshuawb/Code/Discounting_Geometry/.venv/bin/activate
+source "${PROJECT_ROOT}/.venv/bin/activate"
 
 # --- Subject List ---
-# Create a list of all subject IDs from the behavioral directory
-ALL_SUBJECTS=($(find /oak/stanford/groups/russpold/users/buckholtz/Decoding_DD/output/behavioral/ -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
+# Create a list of all subject IDs from the behavioral directory (keep find command on one line)
+ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
 # --- Job Logic ---

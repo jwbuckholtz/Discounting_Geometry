@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #SBATCH --job-name=rsa
 #SBATCH --output=logs/rsa_%j.out
 #SBATCH --error=logs/rsa_%j.err
@@ -7,6 +8,12 @@
 #SBATCH --mem-per-cpu=4G
 #SBATCH --account=russpold
 #SBATCH --partition=russpold
+
+# --- Validate Required Environment Variables ---
+: ${SUBJECT_ID:?ERROR: SUBJECT_ID not set - required for subject processing}
+: ${ANALYSIS_TYPE:?ERROR: ANALYSIS_TYPE not set - required for RSA analysis type}
+: ${CONFIG_FILE:?ERROR: CONFIG_FILE not set - required for configuration}
+: ${ENV:?ERROR: ENV not set - required for environment selection}
 
 # --- Print job submission info ---
 echo "Job ID: $SLURM_JOB_ID"

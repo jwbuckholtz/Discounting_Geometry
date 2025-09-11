@@ -1,8 +1,9 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #
 #SBATCH --job-name=group_glm
-#SBATCH --output=slurm/logs/group_glm_%j.out
-#SBATCH --error=slurm/logs/group_glm_%j.err
+#SBATCH --output=logs/group_glm_%j.out
+#SBATCH --error=logs/group_glm_%j.err
 #
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -15,8 +16,16 @@ ml python/3.9
 # --- Environment Setup ---
 # Activate the virtual environment
 source .venv/bin/activate
+
 # Install project in editable mode if not already done
-uv pip install -e .
+# Check for uv tool, fallback to pip if not available
+if command -v uv &> /dev/null; then
+    echo "Using uv for package installation"
+    uv pip install -e .
+else
+    echo "uv not found, falling back to pip"
+    pip install -e .
+fi
 
 # --- Job Execution ---
 echo "========================================="

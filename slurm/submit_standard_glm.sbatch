@@ -1,8 +1,9 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #
 #SBATCH --job-name=standard_glm
-#SBATCH --output=slurm/logs/standard_glm_%j_%x.out
-#SBATCH --error=slurm/logs/standard_glm_%j_%x.err
+#SBATCH --output=logs/standard_glm_%j_%x.out
+#SBATCH --error=logs/standard_glm_%j_%x.err
 #
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

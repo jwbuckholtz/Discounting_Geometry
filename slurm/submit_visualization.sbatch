@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 #SBATCH --job-name=dd_visualization
-#SBATCH --output=slurm/logs/slurm-visualization-%j.out
-#SBATCH --error=slurm/logs/slurm-visualization-%j.err
+#SBATCH --output=logs/visualization_%j.out
+#SBATCH --error=logs/visualization_%j.err
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1

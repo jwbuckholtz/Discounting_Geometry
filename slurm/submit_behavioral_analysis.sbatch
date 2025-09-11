@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e  # Exit immediately if any command fails
 #SBATCH --job-name=behavioral
 #SBATCH --output=logs/behavioral_%j.out
 #SBATCH --error=logs/behavioral_%j.err
