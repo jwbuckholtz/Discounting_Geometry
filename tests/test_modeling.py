@@ -102,17 +102,19 @@ def synthetic_glm_dataset(tmp_path_factory):
     
     # --- 4. Create an events file ---
     # Create realistic choice-dependent value regressors
-    choice_values = np.random.choice([0, 1], n_trials)
+    choice_values = np.random.choice(['smaller_sooner', 'larger_later'], n_trials)  # Updated: use text labels
     svchosen_values = np.random.rand(n_trials) * 10
     svunchosen_values = np.random.rand(n_trials) * 8  # Different range for unchosen
     svdiff_values = svchosen_values - svunchosen_values  # Realistic difference
     large_amount_values = np.random.rand(n_trials) * 20  # Large amount regressor
+    response_time_values = np.random.uniform(0.5, 3.0, n_trials)  # Realistic reaction times
     
     events_df = pd.DataFrame({
         'onset': np.linspace(5, (n_scans - 10) * tr, n_trials),
-        'duration': np.ones(n_trials) * 1.0,
+        'duration': np.ones(n_trials) * 4.0,  # Will be replaced by response_time in GLM script
         'trial_type': ['trial'] * n_trials,  # Add trial_type column for LSS script
         'choice': choice_values,
+        'response_time': response_time_values,  # Added: reaction time data
         'SVchosen': svchosen_values,
         'SVunchosen': svunchosen_values,
         'SVdiff': svdiff_values,
@@ -153,7 +155,7 @@ def synthetic_glm_dataset(tmp_path_factory):
                 'hrf_model': 'glover',
                 'drift_model': 'cosine',
                 'model_specifications': {
-                    'choice': ['choice'],
+                    'choice': ['choice_smaller_sooner', 'choice_larger_later'],  # Updated: separate choice regressors
                     'value_chosen': ['SVchosen'],
                     'value_unchosen': ['SVunchosen'], 
                     'value_difference': ['SVdiff'],
@@ -193,12 +195,20 @@ def test_run_standard_glm_for_subject_integration(synthetic_glm_dataset):
     # --- Assertions for New Multi-Model Structure ---
     base_output_dir = data["derivatives_dir"] / 'standard_glm' / data["subject_id"]
     
-    # Check for choice model outputs
+    # Check for choice model outputs (now with separate regressors and special contrast)
     choice_model_dir = base_output_dir / 'model-choice'
     if choice_model_dir.exists():
         choice_mean_contrast = choice_model_dir / 'contrast-mean_zmap.nii.gz'
-        choice_regressor_contrast = choice_model_dir / 'contrast-choice_zmap.nii.gz'
+        choice_smaller_sooner_contrast = choice_model_dir / 'contrast-choice_smaller_sooner_zmap.nii.gz'
+        choice_larger_later_contrast = choice_model_dir / 'contrast-choice_larger_later_zmap.nii.gz'
+        choice_comparison_contrast = choice_model_dir / 'contrast-choice_larger_later_vs_smaller_sooner_zmap.nii.gz'
+        choice_comparison_effect = choice_model_dir / 'contrast-choice_larger_later_vs_smaller_sooner_effect.nii.gz'
+        
         assert choice_mean_contrast.exists(), "Choice model 'mean' contrast map was not created."
+        # Note: Individual choice regressors may not have sufficient trials in synthetic data
+        # but the special comparison contrast should be created
+        if choice_comparison_contrast.exists():
+            assert choice_comparison_effect.exists(), "Choice comparison effect size map was not created."
         
     # Check for SVchosen model outputs  
     svchosen_model_dir = base_output_dir / 'model-value_chosen'

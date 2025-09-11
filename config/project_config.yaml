@@ -47,7 +47,8 @@ analysis_params:
     # List of parametric modulators to include in the model.
     # The 'decision' contrast (main effect of all trials) is always included.
     parametric_modulators:
-      - choice
+      - choice_smaller_sooner  # Updated: separate choice regressors
+      - choice_larger_later
       - SVchosen
       - SVunchosen
       - SVsum
@@ -55,7 +56,7 @@ analysis_params:
       - large_amount
     # Modern model specifications: separate models to avoid multicollinearity
     model_specifications:
-      choice: ['choice']
+      choice: ['choice_smaller_sooner', 'choice_larger_later']  # Two separate choice regressors with contrast
       value_chosen: ['SVchosen']
       value_unchosen: ['SVunchosen']
       value_difference: ['SVdiff']

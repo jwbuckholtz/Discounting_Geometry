@@ -504,8 +504,9 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     for design_matrix in glm.design_matrices_:
         all_design_columns.update(design_matrix.columns)
     
+    # Standard contrasts for individual regressors
     contrasts_to_compute = ['mean'] + valid_modulator_cols
-    
+
     for contrast_name in contrasts_to_compute:
         if contrast_name in all_design_columns:
             logging.info(f"Model {model_name}: Computing contrast for '{contrast_name}'")
@@ -520,6 +521,38 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         else:
             logging.warning(f"Model {model_name}: Contrast '{contrast_name}' not found in design matrix columns: {sorted(all_design_columns)}")
     
+    # Special contrast for choice model: larger-later > smaller-sooner
+    if (model_name == 'choice' and 
+        'choice_larger_later' in all_design_columns and 
+        'choice_smaller_sooner' in all_design_columns):
+        
+        logging.info(f"Model {model_name}: Computing special contrast 'larger_later > smaller_sooner'")
+        
+        # Create contrast vector: +1 for larger_later, -1 for smaller_sooner
+        contrast_vector = np.zeros(len(glm.design_matrices_[0].columns))
+        column_names = list(glm.design_matrices_[0].columns)
+        
+        # Find indices for the choice regressors
+        larger_later_idx = column_names.index('choice_larger_later')
+        smaller_sooner_idx = column_names.index('choice_smaller_sooner')
+        
+        contrast_vector[larger_later_idx] = 1.0   # Positive weight for larger_later
+        contrast_vector[smaller_sooner_idx] = -1.0  # Negative weight for smaller_sooner
+        
+        # Compute the contrast
+        choice_contrast_map = glm.compute_contrast(contrast_vector, output_type='z_score')
+        
+        # Save the contrast map
+        choice_contrast_path = output_dir / 'contrast-choice_larger_later_vs_smaller_sooner_zmap.nii.gz'
+        choice_contrast_map.to_filename(str(choice_contrast_path))
+        logging.info(f"Model {model_name}: Saved choice contrast to {choice_contrast_path}")
+        
+        # Also compute and save the effect size map
+        choice_effect_map = glm.compute_contrast(contrast_vector, output_type='effect_size')
+        choice_effect_path = output_dir / 'contrast-choice_larger_later_vs_smaller_sooner_effect.nii.gz'
+        choice_effect_map.to_filename(str(choice_effect_path))
+        logging.info(f"Model {model_name}: Saved choice effect size map to {choice_effect_path}")
+    
     logging.info(f"Model {model_name}: GLM analysis completed for {subject_id}")
 
 def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) -> None:
@@ -531,7 +564,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # Define the separate models to run
     model_specifications = analysis_params['glm'].get('model_specifications', {
-        'choice': ['choice'],
+        'choice': ['choice_smaller_sooner', 'choice_larger_later'],  # Updated: two separate choice regressors
         'value_chosen': ['SVchosen'],
         'value_unchosen': ['SVunchosen'], 
         'value_difference': ['SVdiff'],
@@ -542,36 +575,66 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     logging.info(f"=== Running separate GLM models for {subject_id} ===")
     logging.info(f"Models to run: {list(model_specifications.keys())}")
     
-    # Convert choice values to numeric if needed
+    # Process events DataFrame for modeling improvements
     events_df = subject_data['events_df'].copy()
+    
+    # 1. DURATION IMPROVEMENT: Use reaction time instead of fixed 4s duration
+    if 'response_time' in events_df.columns:
+        # Replace duration with actual reaction time
+        events_df['duration'] = events_df['response_time']
+        logging.info("Using reaction time as event duration instead of fixed 4s duration")
+        
+        # Log duration statistics
+        duration_stats = events_df['duration'].describe()
+        logging.info(f"Duration statistics: mean={duration_stats['mean']:.3f}s, "
+                    f"std={duration_stats['std']:.3f}s, "
+                    f"min={duration_stats['min']:.3f}s, "
+                    f"max={duration_stats['max']:.3f}s")
+    else:
+        logging.warning("No response_time column found - keeping original duration values")
+    
+    # 2. CHOICE REGRESSOR IMPROVEMENT: Create separate regressors for each choice type
     if 'choice' in events_df.columns:
-        original_dtype = events_df['choice'].dtype
+        original_choice = events_df['choice'].copy()
         
-        # First try to convert directly to numeric (handles "0", "1", 0, 1, etc.)
-        events_df['choice'] = pd.to_numeric(events_df['choice'], errors='coerce')
-        
-        # If we still have non-numeric values, apply text mapping
-        if events_df['choice'].isna().any():
-            # Restore original and apply mapping
-            events_df['choice'] = subject_data['events_df']['choice'].copy()
+        # Convert choice to standardized format first
+        if original_choice.dtype == 'object':
+            # Handle text labels
             choice_mapping = {'smaller_sooner': 0, 'larger_later': 1}
-            
-            # Apply mapping, then convert to numeric for any remaining strings
-            events_df['choice'] = events_df['choice'].map(choice_mapping)
-            events_df['choice'] = pd.to_numeric(events_df['choice'], errors='coerce')
-            
-            logging.info("Converted choice column from text labels to numeric (0=smaller_sooner, 1=larger_later)")
+            choice_numeric = original_choice.map(choice_mapping)
+            choice_numeric = pd.to_numeric(choice_numeric, errors='coerce')
         else:
-            logging.info(f"Converted choice column from {original_dtype} to numeric")
+            # Already numeric, just ensure proper type
+            choice_numeric = pd.to_numeric(original_choice, errors='coerce')
         
-        # Check for any remaining NaN values
-        nan_count = events_df['choice'].isna().sum()
+        # Check for conversion issues
+        nan_count = choice_numeric.isna().sum()
         if nan_count > 0:
             logging.warning(f"Choice conversion resulted in {nan_count} NaN values - these trials will be excluded")
             # Remove trials with NaN choice values
-            events_df = events_df.dropna(subset=['choice'])
+            valid_trials = choice_numeric.notna()
+            events_df = events_df[valid_trials].copy()
+            choice_numeric = choice_numeric[valid_trials]
         
-        # Update subject_data with the converted events
+        # Create separate choice regressors
+        # choice_smaller_sooner: 1 for smaller-sooner choices, 0 otherwise
+        events_df['choice_smaller_sooner'] = (choice_numeric == 0).astype(int)
+        
+        # choice_larger_later: 1 for larger-later choices, 0 otherwise  
+        events_df['choice_larger_later'] = (choice_numeric == 1).astype(int)
+        
+        # Keep the original numeric choice column for other uses
+        events_df['choice'] = choice_numeric
+        
+        smaller_sooner_count = events_df['choice_smaller_sooner'].sum()
+        larger_later_count = events_df['choice_larger_later'].sum()
+        
+        logging.info(f"Created separate choice regressors:")
+        logging.info(f"  - choice_smaller_sooner: {smaller_sooner_count} trials")
+        logging.info(f"  - choice_larger_later: {larger_later_count} trials")
+        logging.info(f"  - Total choice trials: {smaller_sooner_count + larger_later_count}")
+        
+        # Update subject_data with the processed events
         subject_data = subject_data.copy()
         subject_data['events_df'] = events_df
     
@@ -605,10 +668,10 @@ if __name__ == "__main__":
     parser.add_argument('subject_id', help='Subject ID to process')
     
     args = parser.parse_args()
-    
+
     # Load configuration and setup logging
-    config = load_config(args.config_path, args.env)
-    setup_logging(config)
+    config = load_config(args.config_path)
+    setup_logging()
     
     # Load subject data
     subject_data = load_modeling_data(args.config_path, args.env, args.subject_id)
