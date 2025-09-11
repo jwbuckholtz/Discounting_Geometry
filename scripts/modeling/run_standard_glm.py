@@ -5,6 +5,8 @@ from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any, List
 import logging
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame] or None:
     """
@@ -12,44 +14,90 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame
     This prevents design matrix misalignment across runs.
     
     Args:
-        confounds_dfs: List of confound DataFrames, one per run
+        confounds_dfs: List of confound DataFrames, one per run (may contain None entries)
         
     Returns:
         List of harmonized confound DataFrames with consistent columns, or None if no confounds
     """
-    if not confounds_dfs or all(df is None or df.empty for df in confounds_dfs):
+    # Filter out None entries and empty DataFrames
+    valid_confounds = [df for df in confounds_dfs if df is not None and not df.empty]
+    
+    if not valid_confounds:
         return None
         
-    # Find the union of all columns across runs
+    # Find the union of all columns across valid runs
     all_columns = set()
-    for df in confounds_dfs:
+    for df in valid_confounds:
         all_columns.update(df.columns)
     
     # Sort columns for consistent ordering
     unified_columns = sorted(all_columns)
     
-    # Harmonize each DataFrame
+    # Harmonize each DataFrame, handling None entries
     harmonized_dfs = []
     for i, df in enumerate(confounds_dfs):
-        harmonized_df = df.copy()
-        
-        # Add missing columns with zeros
-        for col in unified_columns:
-            if col not in harmonized_df.columns:
-                harmonized_df[col] = 0.0
-                logging.info(f"Added missing confound column '{col}' to run {i+1} (filled with zeros)")
-        
-        # Reorder columns to match unified order
-        harmonized_df = harmonized_df[unified_columns]
+        if df is None or df.empty:
+            # Create an empty DataFrame with the unified columns for missing confounds
+            harmonized_df = pd.DataFrame(columns=unified_columns)
+            logging.info(f"Run {i+1} has no confounds - creating empty DataFrame with unified columns")
+        else:
+            harmonized_df = df.copy()
+            
+            # Add missing columns with zeros
+            for col in unified_columns:
+                if col not in harmonized_df.columns:
+                    harmonized_df[col] = 0.0
+                    logging.info(f"Added missing confound column '{col}' to run {i+1} (filled with zeros)")
+            
+            # Reorder columns to match unified order
+            harmonized_df = harmonized_df[unified_columns]
+            
         harmonized_dfs.append(harmonized_df)
     
     logging.info(f"Harmonized {len(confounds_dfs)} confound DataFrames with {len(unified_columns)} columns: {unified_columns}")
     return harmonized_dfs
 
+def _calculate_vif(X: np.ndarray, feature_names: list) -> Dict[str, float]:
+    """
+    Calculate Variance Inflation Factor for each regressor to detect multicollinearity.
+    
+    Args:
+        X: Design matrix (n_samples x n_features)
+        feature_names: Names of the features/regressors
+        
+    Returns:
+        Dictionary mapping feature names to their VIF values
+    """
+    vif_dict = {}
+    
+    for i, feature in enumerate(feature_names):
+        # Regress this feature against all others
+        X_others = np.delete(X, i, axis=1)
+        y = X[:, i]
+        
+        if X_others.shape[1] == 0:  # Only one feature
+            vif_dict[feature] = 1.0
+            continue
+            
+        try:
+            # Fit regression
+            reg = LinearRegression().fit(X_others, y)
+            r2 = r2_score(y, reg.predict(X_others))
+            
+            # VIF = 1 / (1 - R²)
+            vif = 1 / (1 - r2) if r2 < 0.999 else float('inf')
+            vif_dict[feature] = vif
+            
+        except Exception:
+            # If regression fails, assume no multicollinearity
+            vif_dict[feature] = 1.0
+    
+    return vif_dict
+
 def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols: list, run_numbers: list) -> list:
     """
-    Validates modulators across all runs and returns only those that are valid everywhere.
-    This ensures consistent design matrices across runs.
+    Validates modulators and returns those that are valid in at least one run.
+    This is more flexible than requiring validity across ALL runs.
     
     Args:
         events_df: Complete events DataFrame with all runs
@@ -57,47 +105,45 @@ def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols
         run_numbers: List of run numbers to check
         
     Returns:
-        List of modulator columns that are valid across all runs
+        List of modulator columns that are valid in at least one run
     """
     valid_modulators = []
     
     for modulator in all_modulator_cols:
-        is_valid_across_runs = True
+        is_valid_in_any_run = False
+        valid_runs = []
         
         for run_number in run_numbers:
             run_events = events_df[events_df['run'] == run_number]
             
             # Check if column exists and handle NaN values
             if modulator not in run_events.columns:
-                run_events_copy = run_events.copy()
-                run_events_copy[modulator] = 0
-            else:
-                run_events_copy = run_events.copy()
+                continue  # Skip this run for this modulator
+                
+            run_events_copy = run_events.copy()
                 
             # Handle all-NaN columns safely
             if run_events_copy[modulator].isna().all():
-                logging.warning(f"Modulator '{modulator}' is all NaN in run {run_number}. Will be excluded.")
-                is_valid_across_runs = False
-                break
+                continue  # Skip this run for this modulator
                 
             # Fill remaining NaNs with column mean and center
             col_mean = run_events_copy[modulator].mean()
             if pd.isna(col_mean):
-                logging.warning(f"Modulator '{modulator}' has no valid values in run {run_number}. Will be excluded.")
-                is_valid_across_runs = False
-                break
+                continue  # Skip this run for this modulator
                 
             run_events_copy[modulator] = run_events_copy[modulator].fillna(col_mean)
             run_events_copy[modulator] -= col_mean
             
             # Check for zero variance after centering
-            if np.isclose(run_events_copy[modulator].var(), 0):
-                logging.warning(f"Modulator '{modulator}' has zero variance in run {run_number}. Will be excluded.")
-                is_valid_across_runs = False
-                break
+            if not np.isclose(run_events_copy[modulator].var(), 0):
+                is_valid_in_any_run = True
+                valid_runs.append(run_number)
                 
-        if is_valid_across_runs:
+        if is_valid_in_any_run:
             valid_modulators.append(modulator)
+            logging.info(f"Modulator '{modulator}' is valid in runs: {valid_runs}")
+        else:
+            logging.warning(f"Modulator '{modulator}' has no variance in any run. Will be excluded.")
             
     return valid_modulators
 
@@ -207,15 +253,24 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         # Check if we have explicit run start time information in the config
         # For now, use a more conservative approach that preserves intentional timing
         
-        # Only normalize if onsets are clearly session-relative (very large values)
-        # This is much more conservative to avoid destroying intentional baselines
-        if first_onset > 300:  # 5 minutes - clearly session-relative
+        # More sophisticated onset normalization
+        # TODO: Add explicit run start times to config for perfect alignment
+        
+        # Check if we have explicit run timing in the analysis parameters
+        run_start_times = analysis_params.get('run_start_times', {})
+        explicit_start = run_start_times.get(str(run_number))
+        
+        if explicit_start is not None:
+            # Use explicit run start time from config
+            logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
+            run_events_df['onset'] -= explicit_start
+        elif first_onset > 300:  # 5 minutes - clearly session-relative
             logging.info(f"Normalizing clearly session-relative onsets for run {run_number} (first: {first_onset:.1f}s)")
             run_events_df['onset'] -= first_onset
         else:
             # For ambiguous cases, preserve the original timing
             logging.info(f"Preserving onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
-            # Note: If this causes issues, explicit run timing should be added to the config
+            logging.info("Note: Add 'run_start_times' to analysis_params in config for explicit timing control")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
@@ -239,6 +294,29 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
             
     # --- Fit the GLM ---
     glm.fit(valid_bold_imgs, events=events_per_run, confounds=harmonized_confounds)
+    
+    # --- Check for Multicollinearity with VIF ---
+    if glm.design_matrices_:
+        # Get regressors of interest (exclude nuisance regressors)
+        design_cols = glm.design_matrices_[0].columns
+        task_regressors = [col for col in design_cols if not col.startswith(('drift', 'constant'))]
+        
+        if len(task_regressors) > 1:
+            # Calculate VIF for task regressors
+            task_design = glm.design_matrices_[0][task_regressors].values
+            vif_values = _calculate_vif(task_design, task_regressors)
+            
+            # Report VIF values and warn about high multicollinearity
+            high_vif_regressors = []
+            for regressor, vif in vif_values.items():
+                if vif > 10:  # Common threshold for concerning multicollinearity
+                    high_vif_regressors.append(f"{regressor}(VIF={vif:.2f})")
+                    
+            if high_vif_regressors:
+                logging.warning(f"High multicollinearity detected: {', '.join(high_vif_regressors)}. "
+                              "Consider orthogonalizing regressors or checking for redundant modulators.")
+            else:
+                logging.info(f"VIF check passed. Max VIF: {max(vif_values.values()):.2f}")
     
     # --- Enforce Design Matrix Consistency ---
     if len(glm.design_matrices_) > 1:
