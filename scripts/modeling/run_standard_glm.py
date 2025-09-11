@@ -34,14 +34,23 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
     # Sort columns for consistent ordering
     unified_columns = sorted(all_columns)
     
-    # Harmonize each DataFrame, preserving None for missing confounds
+    # Harmonize each DataFrame, ensuring consistent design matrices across runs
     harmonized_dfs = []
     for i, df in enumerate(confounds_dfs):
         if df is None or df.empty:
-            # CRITICAL FIX: Pass None instead of zero-filled DataFrame
-            # This prevents artificial confound regressors from being added to the design matrix
-            harmonized_dfs.append(None)
-            logging.info(f"Run {i+1} has no confounds - will pass None to FirstLevelModel (no artificial regressors)")
+            # CRITICAL FIX: Create zero-filled DataFrame to ensure design matrix consistency
+            # All runs must have the same confound structure for valid contrast computation
+            import nibabel as nib
+            bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
+            n_volumes = bold_img.shape[-1]
+            
+            # Create zero-filled DataFrame with all unified columns
+            harmonized_df = pd.DataFrame(
+                data=np.zeros((n_volumes, len(unified_columns))),
+                columns=unified_columns
+            )
+            harmonized_dfs.append(harmonized_df)
+            logging.info(f"Run {i+1} has no confounds - created zero-filled confound matrix with {len(unified_columns)} columns for design matrix consistency")
         else:
             harmonized_df = df.copy()
             
@@ -324,34 +333,50 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
             run_events_df['onset'] -= explicit_start
         else:
-            # CRITICAL: Detect potential session-relative timing and require explicit correction
-            potentially_session_relative = first_onset > 30  # Even 30s could be session-relative
+            # CRITICAL: Much stricter detection of session-relative timing
+            # Any onset pattern that could be session-relative must be explicitly configured
             
-            if potentially_session_relative:
-                # Issue a strong warning about potential misalignment
-                logging.error(f"CRITICAL: Run {run_number} onsets start at {first_onset:.1f}s which may be "
-                             f"session-relative timing. This could cause BOLD misalignment!")
-                logging.error(f"REQUIRED: Add explicit 'run_start_times' to analysis_params in config:")
-                logging.error(f"  analysis_params:")
-                logging.error(f"    run_start_times:")
-                logging.error(f"      '{run_number}': <actual_run_start_time_in_seconds>")
-                
-                # For very large values, abort rather than guess
-                if first_onset > 300:  # 5+ minutes is almost certainly session-relative
-                    raise ValueError(f"Run {run_number} has onsets starting at {first_onset:.1f}s, "
-                                   f"which is almost certainly session-relative timing. "
-                                   f"Add explicit 'run_start_times' to config to proceed safely.")
-                else:
-                    # For moderate values, preserve but warn heavily
-                    logging.warning(f"Preserving potentially session-relative onsets for run {run_number}. "
-                                   f"Add explicit timing to config to ensure BOLD alignment.")
-            else:
-                # Onsets start near zero - likely already normalized
+            # Check for multiple indicators of session-relative timing
+            definitely_run_relative = (
+                first_onset < 10 and  # Starts very early (< 10s)
+                last_onset < 600      # Ends within 10 minutes (typical run length)
+            )
+            
+            definitely_session_relative = (
+                first_onset > 120 or  # Starts after 2+ minutes (almost certainly session-relative)
+                (first_onset > 30 and last_onset > 1200)  # Starts after 30s AND goes beyond 20 minutes
+            )
+            
+            if definitely_session_relative:
+                # Abort for clear session-relative timing
+                raise ValueError(f"CRITICAL: Run {run_number} has session-relative timing "
+                               f"(first: {first_onset:.1f}s, last: {last_onset:.1f}s). "
+                               f"This WILL cause BOLD misalignment. Add explicit 'run_start_times' to config:\n"
+                               f"  analysis_params:\n"
+                               f"    run_start_times:\n"
+                               f"      '{run_number}': <actual_run_start_time_in_seconds>")
+            
+            elif definitely_run_relative:
+                # Accept clear run-relative timing
                 logging.info(f"Preserving run-relative onsets for run {run_number} "
                            f"(first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
+            
+            else:
+                # Ambiguous timing - require explicit configuration for safety
+                logging.error(f"AMBIGUOUS TIMING: Run {run_number} onsets (first: {first_onset:.1f}s, "
+                             f"last: {last_onset:.1f}s) could be either run-relative or session-relative!")
+                logging.error(f"For data safety, explicit timing is REQUIRED for ambiguous cases:")
+                logging.error(f"  analysis_params:")
+                logging.error(f"    run_start_times:")
+                logging.error(f"      '{run_number}': <0_if_run_relative_OR_actual_start_time_if_session_relative>")
                 
-            # Always provide explicit guidance
-            logging.info("BEST PRACTICE: Add 'run_start_times' to analysis_params for guaranteed alignment:")
+                raise ValueError(f"Ambiguous timing for run {run_number}. Add explicit 'run_start_times' "
+                               f"to config to proceed safely. Use 0 if onsets are already run-relative, "
+                               f"or the actual run start time if they are session-relative.")
+                
+            # Always provide configuration guidance
+            if 'run_start_times' not in analysis_params:
+                logging.info("BEST PRACTICE: Add 'run_start_times' to analysis_params for guaranteed alignment")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
