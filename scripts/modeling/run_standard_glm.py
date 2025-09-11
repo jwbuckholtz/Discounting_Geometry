@@ -132,6 +132,12 @@ def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols
             # Handle all-NaN columns safely
             if run_events_copy[modulator].isna().all():
                 continue  # Skip this run for this modulator
+            
+            # Count non-NaN entries - need at least 2 for variance calculation
+            non_nan_count = run_events_copy[modulator].notna().sum()
+            if non_nan_count <= 1:
+                logging.debug(f"Modulator '{modulator}' has only {non_nan_count} non-NaN value(s) in run {run_number}")
+                continue  # Skip this run for this modulator
                 
             # Fill remaining NaNs with column mean and center
             col_mean = run_events_copy[modulator].mean()
@@ -142,7 +148,8 @@ def _validate_modulators_across_runs(events_df: pd.DataFrame, all_modulator_cols
             run_events_copy[modulator] -= col_mean
             
             # Check for zero variance after centering
-            if not np.isclose(run_events_copy[modulator].var(), 0):
+            modulator_var = run_events_copy[modulator].var()
+            if not (pd.isna(modulator_var) or np.isclose(modulator_var, 0)):
                 is_valid_in_any_run = True
                 valid_runs.append(run_number)
                 
@@ -331,7 +338,7 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     # --- Fit the GLM ---
     glm.fit(valid_bold_imgs, events=events_per_run, confounds=harmonized_confounds)
     
-    # --- Check for Multicollinearity with VIF ---
+    # --- Check for Multicollinearity with VIF Across All Runs ---
     if glm.design_matrices_:
         # Get only task regressors (exclude drift, constant, and confound regressors)
         design_cols = glm.design_matrices_[0].columns
@@ -348,55 +355,86 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
                 task_regressors.append(col)
         
         if len(task_regressors) > 1:
-            # Calculate VIF for task regressors only
-            task_design = glm.design_matrices_[0][task_regressors].values
-            vif_values = _calculate_vif(task_design, task_regressors)
+            # Calculate VIF for each run and track maximum across runs
+            max_vif_per_regressor = {}
+            run_with_max_vif = {}
+            
+            for run_idx, design_matrix in enumerate(glm.design_matrices_):
+                if all(reg in design_matrix.columns for reg in task_regressors):
+                    # Calculate VIF for this run
+                    task_design = design_matrix[task_regressors].values
+                    vif_values = _calculate_vif(task_design, task_regressors)
+                    
+                    # Track maximum VIF per regressor across runs
+                    for regressor, vif in vif_values.items():
+                        if regressor not in max_vif_per_regressor or vif > max_vif_per_regressor[regressor]:
+                            max_vif_per_regressor[regressor] = vif
+                            run_with_max_vif[regressor] = run_idx + 1
             
             # Report VIF values and warn about high multicollinearity
             high_vif_regressors = []
-            for regressor, vif in vif_values.items():
-                if vif > 10:  # Common threshold for concerning multicollinearity
-                    high_vif_regressors.append(f"{regressor}(VIF={vif:.2f})")
+            for regressor, max_vif in max_vif_per_regressor.items():
+                if max_vif > 10:  # Common threshold for concerning multicollinearity
+                    run_num = run_with_max_vif[regressor]
+                    high_vif_regressors.append(f"{regressor}(VIF={max_vif:.2f} in run {run_num})")
                     
             if high_vif_regressors:
                 logging.warning(f"Model {model_name}: High multicollinearity detected among task regressors: {', '.join(high_vif_regressors)}. "
                               "Consider orthogonalizing regressors or checking for redundant modulators.")
             else:
-                logging.info(f"Model {model_name}: VIF check passed for {len(task_regressors)} task regressors. Max VIF: {max(vif_values.values()):.2f}")
+                overall_max_vif = max(max_vif_per_regressor.values()) if max_vif_per_regressor else 0
+                logging.info(f"Model {model_name}: VIF check passed for {len(task_regressors)} task regressors across {len(glm.design_matrices_)} runs. Max VIF: {overall_max_vif:.2f}")
         else:
             logging.info(f"Model {model_name}: Only {len(task_regressors)} task regressor(s) found - VIF check not applicable")
     
-    # --- Enforce Design Matrix Consistency ---
+    # --- Enforce Design Matrix Consistency (Including Column Order) ---
     if len(glm.design_matrices_) > 1:
-        # Check that all design matrices have the same columns
-        first_columns = set(glm.design_matrices_[0].columns)
+        # Check that all design matrices have the same columns AND order
+        first_columns_ordered = list(glm.design_matrices_[0].columns)
+        first_columns_set = set(first_columns_ordered)
         inconsistent_runs = []
         
         for i, design_matrix in enumerate(glm.design_matrices_[1:], 1):
-            current_columns = set(design_matrix.columns)
-            if current_columns != first_columns:
-                missing = first_columns - current_columns
-                extra = current_columns - first_columns
+            current_columns_ordered = list(design_matrix.columns)
+            current_columns_set = set(current_columns_ordered)
+            
+            # Check for missing/extra columns
+            missing = first_columns_set - current_columns_set
+            extra = current_columns_set - first_columns_set
+            
+            # Check for column order differences (even if same columns)
+            order_mismatch = first_columns_ordered != current_columns_ordered
+            
+            if missing or extra or order_mismatch:
                 inconsistent_runs.append({
                     'run': valid_run_numbers[i],
                     'missing': missing,
-                    'extra': extra
+                    'extra': extra,
+                    'order_mismatch': order_mismatch,
+                    'expected_order': first_columns_ordered,
+                    'actual_order': current_columns_ordered
                 })
         
         # Enforce consistency - raise error if matrices differ
         if inconsistent_runs:
             error_msg = f"Design matrix inconsistencies detected for {subject_id} model {model_name}:\n"
             for issue in inconsistent_runs:
-                error_msg += f"  Run {issue['run']}: missing={issue['missing']}, extra={issue['extra']}\n"
+                run_num = issue['run']
+                if issue['missing'] or issue['extra']:
+                    error_msg += f"  Run {run_num}: missing={issue['missing']}, extra={issue['extra']}\n"
+                if issue['order_mismatch']:
+                    error_msg += f"  Run {run_num}: Column order mismatch\n"
+                    error_msg += f"    Expected: {issue['expected_order']}\n"
+                    error_msg += f"    Actual:   {issue['actual_order']}\n"
             error_msg += "This indicates problems with confound harmonization or event processing."
             raise ValueError(error_msg)
                     
         # Log the final design matrix structure
-        logging.info(f"Model {model_name}: Design matrices consistent across {len(glm.design_matrices_)} runs with {len(first_columns)} columns: {sorted(first_columns)}")
+        logging.info(f"Model {model_name}: Design matrices consistent across {len(glm.design_matrices_)} runs with {len(first_columns_set)} columns in correct order: {first_columns_ordered}")
     else:
         # Single run case
-        columns = set(glm.design_matrices_[0].columns)
-        logging.info(f"Model {model_name}: Single run design matrix has {len(columns)} columns: {sorted(columns)}")
+        columns_ordered = list(glm.design_matrices_[0].columns)
+        logging.info(f"Model {model_name}: Single run design matrix has {len(columns_ordered)} columns: {columns_ordered}")
 
     # --- Define and Compute Contrasts ---
     # Check for contrasts across ALL design matrices, not just the first one
