@@ -21,6 +21,15 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     
     logging.info(f"--- Running LSS Model for {subject_id} on {len(bold_imgs)} run(s) ---")
     
+    # CRITICAL FIX: Validate required columns before processing
+    required_event_columns = ['onset', 'duration', 'run', 'trial_type']
+    missing_columns = [col for col in required_event_columns if col not in events_df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required event columns for LSS: {missing_columns}. "
+                        f"Available columns: {list(events_df.columns)}")
+    
+    logging.info(f"LSS event validation passed - required columns present: {required_event_columns}")
+    
     # --- Onset Normalization ---
     corrected_events_list = []
     for run_number in sorted(events_df['run'].unique()):
@@ -34,6 +43,27 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
 
     # --- GLM Specification ---
     analysis_params = params['analysis_params']
+    
+    # CRITICAL FIX: Intelligent CPU allocation for HPC environments
+    # Avoid oversubscribing CPUs beyond SLURM allocation
+    import os
+    n_jobs = -1  # Default: use all cores
+    
+    # Check for SLURM environment and respect CPU allocation
+    slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK')
+    if slurm_cpus:
+        try:
+            n_jobs = int(slurm_cpus)
+            logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for LSS parallel processing")
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
+    
+    # Allow configuration override
+    config_n_jobs = analysis_params.get('n_jobs')
+    if config_n_jobs is not None:
+        n_jobs = config_n_jobs
+        logging.info(f"Using configured n_jobs={n_jobs} for LSS parallel processing")
+    
     glm = FirstLevelModel(
         t_r=analysis_params['t_r'],
         slice_time_ref=analysis_params['slice_time_ref'],
@@ -41,7 +71,7 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
         drift_model='cosine',
         mask_img=subject_data['mask_file'],
         signal_scaling=False,
-        n_jobs=-1
+        n_jobs=n_jobs
     )
 
     # --- Prepare a dictionary of per-run event dataframes (for nuisance regressors) ---

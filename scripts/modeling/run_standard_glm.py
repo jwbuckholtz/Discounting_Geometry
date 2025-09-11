@@ -266,6 +266,27 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     output_dir.mkdir(parents=True, exist_ok=True)
 
     analysis_params = params['analysis_params']
+    
+    # CRITICAL FIX: Intelligent CPU allocation for HPC environments
+    # Avoid oversubscribing CPUs beyond SLURM allocation
+    import os
+    n_jobs = -1  # Default: use all cores
+    
+    # Check for SLURM environment and respect CPU allocation
+    slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK')
+    if slurm_cpus:
+        try:
+            n_jobs = int(slurm_cpus)
+            logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for GLM parallel processing")
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
+    
+    # Allow configuration override
+    config_n_jobs = analysis_params.get('n_jobs')
+    if config_n_jobs is not None:
+        n_jobs = config_n_jobs
+        logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
+    
     glm = FirstLevelModel(
         t_r=analysis_params['t_r'],
         slice_time_ref=analysis_params['slice_time_ref'],
@@ -273,7 +294,7 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         drift_model=analysis_params['glm']['drift_model'],
         smoothing_fwhm=analysis_params['smoothing_fwhm'],
         mask_img=subject_data['mask_file'],
-        n_jobs=-1
+        n_jobs=n_jobs
     )
     
     # --- First Pass: Identify Runs with Events ---
@@ -323,7 +344,9 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         # STRICT onset handling - require explicit timing for session-relative data
         # Check if we have explicit run timing in the analysis parameters
         run_start_times = analysis_params.get('run_start_times', {})
-        explicit_start = run_start_times.get(str(run_number))
+        # CRITICAL FIX: Handle both string and numeric keys for run_start_times
+        # YAML can parse numeric keys as integers, but we might store them as strings
+        explicit_start = run_start_times.get(str(run_number)) or run_start_times.get(run_number)
         
         first_onset = run_events_df['onset'].min()
         last_onset = run_events_df['onset'].max()
@@ -562,21 +585,20 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     """
     analysis_params = params['analysis_params']
     
-    # Define the separate models to run
-    model_specifications = analysis_params['glm'].get('model_specifications', {
-        'choice': ['choice_smaller_sooner', 'choice_larger_later'],  # Updated: two separate choice regressors
-        'value_chosen': ['SVchosen'],
-        'value_unchosen': ['SVunchosen'], 
-        'value_difference': ['SVdiff'],
-        'large_amount': ['large_amount']
-    })
-    
     subject_id = subject_data['subject_id']
     logging.info(f"=== Running separate GLM models for {subject_id} ===")
-    logging.info(f"Models to run: {list(model_specifications.keys())}")
     
     # Process events DataFrame for modeling improvements
     events_df = subject_data['events_df'].copy()
+    
+    # CRITICAL FIX: Validate required columns before processing
+    required_event_columns = ['onset', 'duration', 'run']
+    missing_columns = [col for col in required_event_columns if col not in events_df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required event columns: {missing_columns}. "
+                        f"Available columns: {list(events_df.columns)}")
+    
+    logging.info(f"Event validation passed - required columns present: {required_event_columns}")
     
     # 1. DURATION IMPROVEMENT: Use reaction time instead of fixed 4s duration
     if 'response_time' in events_df.columns:
@@ -633,10 +655,30 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         logging.info(f"  - choice_smaller_sooner: {smaller_sooner_count} trials")
         logging.info(f"  - choice_larger_later: {larger_later_count} trials")
         logging.info(f"  - Total choice trials: {smaller_sooner_count + larger_later_count}")
-        
-        # Update subject_data with the processed events
-        subject_data = subject_data.copy()
-        subject_data['events_df'] = events_df
+    
+    # CRITICAL FIX: Always update subject_data with processed events_df
+    # This ensures duration changes and other preprocessing are preserved
+    # even when choice column is missing
+    subject_data = subject_data.copy()
+    subject_data['events_df'] = events_df
+    
+    # Define models to run based on available columns
+    default_models = {
+        'value_chosen': ['SVchosen'],
+        'value_unchosen': ['SVunchosen'], 
+        'value_difference': ['SVdiff'],
+        'large_amount': ['large_amount']
+    }
+    
+    # CRITICAL FIX: Only include choice model if choice regressors were created
+    if 'choice_smaller_sooner' in events_df.columns and 'choice_larger_later' in events_df.columns:
+        default_models['choice'] = ['choice_smaller_sooner', 'choice_larger_later']
+        logging.info("Choice regressors available - including choice model in analysis")
+    else:
+        logging.warning("Choice regressors not available - skipping choice model")
+    
+    model_specifications = analysis_params['glm'].get('model_specifications', default_models)
+    logging.info(f"Models to run: {list(model_specifications.keys())}")
     
     # Run each model separately
     successful_models = []
