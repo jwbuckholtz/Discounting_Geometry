@@ -8,13 +8,14 @@ import logging
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame] or None:
+def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> List[pd.DataFrame] or None:
     """
     Harmonizes confound DataFrames to have identical column sets and orders.
     This prevents design matrix misalignment across runs.
     
     Args:
         confounds_dfs: List of confound DataFrames, one per run (may contain None entries)
+        bold_imgs: List of BOLD images to get proper dimensions for missing confounds
         
     Returns:
         List of harmonized confound DataFrames with consistent columns, or None if no confounds
@@ -33,13 +34,19 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame]) -> List[pd.DataFrame
     # Sort columns for consistent ordering
     unified_columns = sorted(all_columns)
     
-    # Harmonize each DataFrame, handling None entries
+    # Harmonize each DataFrame, handling None entries with proper dimensions
     harmonized_dfs = []
     for i, df in enumerate(confounds_dfs):
         if df is None or df.empty:
-            # Create an empty DataFrame with the unified columns for missing confounds
-            harmonized_df = pd.DataFrame(columns=unified_columns)
-            logging.info(f"Run {i+1} has no confounds - creating empty DataFrame with unified columns")
+            # Get the number of volumes from the corresponding BOLD image
+            n_volumes = bold_imgs[i].shape[-1]
+            
+            # Create a DataFrame with correct dimensions (n_volumes x n_columns)
+            harmonized_df = pd.DataFrame(
+                data=np.zeros((n_volumes, len(unified_columns))),
+                columns=unified_columns
+            )
+            logging.info(f"Run {i+1} has no confounds - creating zero-filled DataFrame with {n_volumes} volumes and {len(unified_columns)} columns")
         else:
             harmonized_df = df.copy()
             
@@ -246,6 +253,13 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         if run_events_df.empty:
             continue
             
+        # Check for completely missing essential columns that would prevent GLM
+        required_cols = ['onset', 'duration']
+        missing_required = [col for col in required_cols if col not in run_events_df.columns]
+        if missing_required:
+            logging.error(f"Run {run_number} missing required columns: {missing_required}, skipping")
+            continue
+            
         # Explicit onset normalization based on run timing expectations
         first_onset = run_events_df['onset'].min()
         last_onset = run_events_df['onset'].max()
@@ -253,24 +267,44 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
         # Check if we have explicit run start time information in the config
         # For now, use a more conservative approach that preserves intentional timing
         
-        # More sophisticated onset normalization
-        # TODO: Add explicit run start times to config for perfect alignment
-        
+        # Enhanced onset normalization with better heuristics and explicit timing support
         # Check if we have explicit run timing in the analysis parameters
         run_start_times = analysis_params.get('run_start_times', {})
         explicit_start = run_start_times.get(str(run_number))
         
         if explicit_start is not None:
-            # Use explicit run start time from config
+            # Use explicit run start time from config (most reliable)
             logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
             run_events_df['onset'] -= explicit_start
-        elif first_onset > 300:  # 5 minutes - clearly session-relative
-            logging.info(f"Normalizing clearly session-relative onsets for run {run_number} (first: {first_onset:.1f}s)")
-            run_events_df['onset'] -= first_onset
         else:
-            # For ambiguous cases, preserve the original timing
-            logging.info(f"Preserving onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
-            logging.info("Note: Add 'run_start_times' to analysis_params in config for explicit timing control")
+            # Enhanced heuristic-based normalization
+            onset_range = last_onset - first_onset
+            
+            # Multiple criteria for detecting session-relative timing:
+            # 1. First onset > 300s (original criterion)
+            # 2. Large onset range suggesting session timing
+            # 3. First onset significantly larger than typical run duration
+            
+            needs_normalization = (
+                first_onset > 300 or  # Original criterion
+                (first_onset > 60 and onset_range < first_onset * 0.3) or  # Large start with compact range
+                first_onset > 1800  # > 30 min definitely session-relative
+            )
+            
+            if needs_normalization:
+                logging.info(f"Normalizing session-relative onsets for run {run_number} "
+                           f"(first: {first_onset:.1f}s, range: {onset_range:.1f}s)")
+                run_events_df['onset'] -= first_onset
+            else:
+                # Preserve original timing but warn about potential issues
+                logging.info(f"Preserving onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
+                if first_onset > 10:  # Suspicious but not clearly session-relative
+                    logging.warning(f"Run {run_number} onsets start at {first_onset:.1f}s - "
+                                  "consider adding explicit 'run_start_times' to config if timing issues occur")
+                
+            # Always provide guidance on explicit timing
+            if 'run_start_times' not in analysis_params:
+                logging.info("For precise timing control, add 'run_start_times' to analysis_params in config")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
@@ -285,7 +319,7 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     logging.info(f"Processing {len(events_per_run)} valid runs (skipped {len(run_numbers) - len(events_per_run)} empty runs)")
     
     # --- Harmonize Confounds ---
-    harmonized_confounds = _harmonize_confounds(valid_confounds_dfs)
+    harmonized_confounds = _harmonize_confounds(valid_confounds_dfs, valid_bold_imgs)
     
     if harmonized_confounds is None:
         logging.info("No confounds available - fitting GLM without confound regressors")
@@ -297,12 +331,22 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # --- Check for Multicollinearity with VIF ---
     if glm.design_matrices_:
-        # Get regressors of interest (exclude nuisance regressors)
+        # Get only task regressors (exclude drift, constant, and confound regressors)
         design_cols = glm.design_matrices_[0].columns
-        task_regressors = [col for col in design_cols if not col.startswith(('drift', 'constant'))]
+        
+        # More sophisticated filtering to exclude nuisance regressors
+        nuisance_patterns = ['drift', 'constant', 'tx', 'ty', 'tz', 'rx', 'ry', 'rz', 
+                           'csf', 'white_matter', 'global_signal', 'framewise_displacement',
+                           'a_comp_cor', 'cos', 'sin', 'dvars', 'std_dvars']
+        
+        task_regressors = []
+        for col in design_cols:
+            is_nuisance = any(pattern in col.lower() for pattern in nuisance_patterns)
+            if not is_nuisance:
+                task_regressors.append(col)
         
         if len(task_regressors) > 1:
-            # Calculate VIF for task regressors
+            # Calculate VIF for task regressors only
             task_design = glm.design_matrices_[0][task_regressors].values
             vif_values = _calculate_vif(task_design, task_regressors)
             
@@ -313,10 +357,12 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
                     high_vif_regressors.append(f"{regressor}(VIF={vif:.2f})")
                     
             if high_vif_regressors:
-                logging.warning(f"High multicollinearity detected: {', '.join(high_vif_regressors)}. "
+                logging.warning(f"High multicollinearity detected among task regressors: {', '.join(high_vif_regressors)}. "
                               "Consider orthogonalizing regressors or checking for redundant modulators.")
             else:
-                logging.info(f"VIF check passed. Max VIF: {max(vif_values.values()):.2f}")
+                logging.info(f"VIF check passed for {len(task_regressors)} task regressors. Max VIF: {max(vif_values.values()):.2f}")
+        else:
+            logging.info(f"Only {len(task_regressors)} task regressor(s) found - VIF check not applicable")
     
     # --- Enforce Design Matrix Consistency ---
     if len(glm.design_matrices_) > 1:
