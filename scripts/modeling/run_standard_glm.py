@@ -18,7 +18,7 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         bold_imgs: List of BOLD images to get proper dimensions for missing confounds
         
     Returns:
-        List of harmonized confound DataFrames with consistent columns, or None if no confounds
+        List of harmonized confound DataFrames (with None for missing confounds), or None if no confounds
     """
     # Filter out None entries and empty DataFrames
     valid_confounds = [df for df in confounds_dfs if df is not None and not df.empty]
@@ -34,23 +34,18 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
     # Sort columns for consistent ordering
     unified_columns = sorted(all_columns)
     
-    # Harmonize each DataFrame, handling None entries with proper dimensions
+    # Harmonize each DataFrame, preserving None for missing confounds
     harmonized_dfs = []
     for i, df in enumerate(confounds_dfs):
         if df is None or df.empty:
-            # Get the number of volumes from the corresponding BOLD image
-            n_volumes = bold_imgs[i].shape[-1]
-            
-            # Create a DataFrame with correct dimensions (n_volumes x n_columns)
-            harmonized_df = pd.DataFrame(
-                data=np.zeros((n_volumes, len(unified_columns))),
-                columns=unified_columns
-            )
-            logging.info(f"Run {i+1} has no confounds - creating zero-filled DataFrame with {n_volumes} volumes and {len(unified_columns)} columns")
+            # CRITICAL FIX: Pass None instead of zero-filled DataFrame
+            # This prevents artificial confound regressors from being added to the design matrix
+            harmonized_dfs.append(None)
+            logging.info(f"Run {i+1} has no confounds - will pass None to FirstLevelModel (no artificial regressors)")
         else:
             harmonized_df = df.copy()
             
-            # Add missing columns with zeros
+            # Add missing columns with zeros only for runs that have confounds
             for col in unified_columns:
                 if col not in harmonized_df.columns:
                     harmonized_df[col] = 0.0
@@ -58,10 +53,17 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
             
             # Reorder columns to match unified order
             harmonized_df = harmonized_df[unified_columns]
-            
-        harmonized_dfs.append(harmonized_df)
+            harmonized_dfs.append(harmonized_df)
     
-    logging.info(f"Harmonized {len(confounds_dfs)} confound DataFrames with {len(unified_columns)} columns: {unified_columns}")
+    # Check if we still have any valid confounds
+    valid_harmonized = [df for df in harmonized_dfs if df is not None]
+    if not valid_harmonized:
+        logging.info("No valid confounds found after harmonization")
+        return None
+    
+    none_count = sum(1 for df in confounds_dfs if df is None or (hasattr(df, 'empty') and df.empty))
+    logging.info(f"Harmonized {len(confounds_dfs)} confound entries ({len(valid_harmonized)} with data, {none_count} without) "
+                f"with {len(unified_columns)} columns: {unified_columns}")
     return harmonized_dfs
 
 def _calculate_vif(X: np.ndarray, feature_names: list) -> Dict[str, float]:
@@ -278,7 +280,7 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             logging.error(f"Run {run_number} missing required columns: {missing_required}, skipping")
             continue
             
-        # Enhanced onset normalization with better heuristics and explicit timing support
+        # Conservative onset handling with preference for explicit timing
         # Check if we have explicit run timing in the analysis parameters
         run_start_times = analysis_params.get('run_start_times', {})
         explicit_start = run_start_times.get(str(run_number))
@@ -291,30 +293,32 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             logging.info(f"Using explicit start time {explicit_start}s for run {run_number}")
             run_events_df['onset'] -= explicit_start
         else:
-            # Enhanced heuristic-based normalization
-            onset_range = last_onset - first_onset
+            # CONSERVATIVE approach: avoid heuristic normalization that may misalign events
+            # Only normalize in very obvious cases of session-relative timing
             
-            # Multiple criteria for detecting session-relative timing
-            needs_normalization = (
-                first_onset > 300 or  # Original criterion
-                (first_onset > 60 and onset_range < first_onset * 0.3) or  # Large start with compact range
-                first_onset > 1800  # > 30 min definitely session-relative
+            # Much more conservative criteria to prevent BOLD misalignment
+            definitely_session_relative = (
+                first_onset > 1800  # > 30 min - definitely session-relative
             )
             
-            if needs_normalization:
-                logging.info(f"Normalizing session-relative onsets for run {run_number} "
-                           f"(first: {first_onset:.1f}s, range: {onset_range:.1f}s)")
+            if definitely_session_relative:
+                logging.info(f"Normalizing clearly session-relative onsets for run {run_number} "
+                           f"(first onset: {first_onset:.1f}s - definitely session timing)")
                 run_events_df['onset'] -= first_onset
             else:
-                # Preserve original timing but warn about potential issues
-                logging.info(f"Preserving onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
-                if first_onset > 10:  # Suspicious but not clearly session-relative
-                    logging.warning(f"Run {run_number} onsets start at {first_onset:.1f}s - "
-                                  "consider adding explicit 'run_start_times' to config if timing issues occur")
+                # Preserve original timing - safer approach
+                logging.info(f"Preserving original onsets for run {run_number} (first: {first_onset:.1f}s, last: {last_onset:.1f}s)")
                 
-            # Always provide guidance on explicit timing
+                # Provide guidance for explicit timing
+                if first_onset > 60:  # Could be session-relative but not certain
+                    logging.warning(f"Run {run_number} onsets start at {first_onset:.1f}s - "
+                                  "this may be session-relative timing. Consider adding explicit 'run_start_times' "
+                                  "to analysis_params in config to ensure proper BOLD alignment")
+                
+            # Always provide guidance on explicit timing when not available
             if 'run_start_times' not in analysis_params:
-                logging.info("For precise timing control, add 'run_start_times' to analysis_params in config")
+                logging.info("RECOMMENDATION: Add 'run_start_times' to analysis_params in config "
+                           "for precise timing control and guaranteed BOLD alignment")
         
         prepared_events = prepare_run_events(run_events_df, valid_modulator_cols)
         events_per_run.append(prepared_events)
@@ -481,10 +485,32 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     
     # Convert choice values to numeric if needed
     events_df = subject_data['events_df'].copy()
-    if 'choice' in events_df.columns and events_df['choice'].dtype == 'object':
-        choice_mapping = {'smaller_sooner': 0, 'larger_later': 1}
-        events_df['choice'] = events_df['choice'].map(choice_mapping)
-        logging.info("Converted choice column from text to numeric (0=smaller_sooner, 1=larger_later)")
+    if 'choice' in events_df.columns:
+        original_dtype = events_df['choice'].dtype
+        
+        # First try to convert directly to numeric (handles "0", "1", 0, 1, etc.)
+        events_df['choice'] = pd.to_numeric(events_df['choice'], errors='coerce')
+        
+        # If we still have non-numeric values, apply text mapping
+        if events_df['choice'].isna().any():
+            # Restore original and apply mapping
+            events_df['choice'] = subject_data['events_df']['choice'].copy()
+            choice_mapping = {'smaller_sooner': 0, 'larger_later': 1}
+            
+            # Apply mapping, then convert to numeric for any remaining strings
+            events_df['choice'] = events_df['choice'].map(choice_mapping)
+            events_df['choice'] = pd.to_numeric(events_df['choice'], errors='coerce')
+            
+            logging.info("Converted choice column from text labels to numeric (0=smaller_sooner, 1=larger_later)")
+        else:
+            logging.info(f"Converted choice column from {original_dtype} to numeric")
+        
+        # Check for any remaining NaN values
+        nan_count = events_df['choice'].isna().sum()
+        if nan_count > 0:
+            logging.warning(f"Choice conversion resulted in {nan_count} NaN values - these trials will be excluded")
+            # Remove trials with NaN choice values
+            events_df = events_df.dropna(subset=['choice'])
         
         # Update subject_data with the converted events
         subject_data = subject_data.copy()
