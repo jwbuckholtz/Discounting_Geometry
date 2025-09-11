@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 #SBATCH --job-name=standard_glm
-#SBATCH --output=logs/standard_glm_%j_%x.out
-#SBATCH --error=logs/standard_glm_%j_%x.err
+#SBATCH --output=logs/standard_glm_%j_%x.out  # Relative to PROJECT_ROOT (set via cd below)
+#SBATCH --error=logs/standard_glm_%j_%x.err   # Relative to PROJECT_ROOT (set via cd below)
 #
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

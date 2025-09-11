@@ -1,14 +1,15 @@
 import argparse
 import pandas as pd
 import numpy as np
+import nibabel as nib
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> List[pd.DataFrame] or None:
+def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> Optional[List[pd.DataFrame]]:
     """
     Harmonizes confound DataFrames to have identical column sets and orders.
     This prevents design matrix misalignment across runs.
@@ -40,7 +41,6 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         if df is None or df.empty:
             # CRITICAL FIX: Create zero-filled DataFrame to ensure design matrix consistency
             # All runs must have the same confound structure for valid contrast computation
-            import nibabel as nib
             bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
             n_volumes = bold_img.shape[-1]
             
@@ -56,7 +56,6 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
             
             # CRITICAL: Verify confound row count matches BOLD volumes
             # Load BOLD image to get volume count (bold_imgs contains file paths)
-            import nibabel as nib
             bold_img = nib.load(bold_imgs[i]) if isinstance(bold_imgs[i], str) else bold_imgs[i]
             n_volumes = bold_img.shape[-1]
             n_confound_rows = len(harmonized_df)
@@ -297,8 +296,9 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         logging.warning(f"Model {model_name}: Dropped invalid regressors: {dropped}")
     
     if not valid_modulator_cols:
-        logging.warning(f"Model {model_name}: No valid regressors found - skipping")
-        return
+        error_msg = f"Model {model_name}: No valid regressors found - cannot proceed with empty model"
+        logging.error(error_msg)
+        raise ValueError(error_msg)
 
     # --- Prepare Events for Each Valid Run ---
     events_per_run = []
