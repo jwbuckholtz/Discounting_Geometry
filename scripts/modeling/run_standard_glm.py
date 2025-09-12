@@ -10,7 +10,7 @@ import logging
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> Optional[List[pd.DataFrame]]:
+def _harmonize_confounds(confounds_dfs: List[Optional[pd.DataFrame]], bold_imgs: List) -> Optional[List[pd.DataFrame]]:
     """
     Harmonizes confound DataFrames to have identical column sets and orders.
     This prevents design matrix misalignment across runs.
@@ -417,19 +417,22 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     valid_run_numbers = []
 
     for run_number in run_numbers:
-        # CRITICAL FIX: Verify run data exists before processing
+        # CRITICAL FIX: Check for events first to avoid spurious missing-data errors
+        # Runs with no events should be skipped before validating BOLD/confounds
+        run_events_df = events_df[events_df['run'] == run_number].copy()
+        
+        # Skip runs with no events before checking BOLD/confound availability
+        if run_events_df.empty:
+            logging.debug(f"Run {run_number} has no events - skipping")
+            continue
+        
+        # Now verify run data exists for runs that actually have events
         if run_number not in bold_imgs_by_run:
             logging.error(f"Run {run_number} missing BOLD image - skipping")
             continue
         
         if run_number not in confounds_by_run:
             logging.error(f"Run {run_number} missing confounds - skipping")
-            continue
-            
-        run_events_df = events_df[events_df['run'] == run_number].copy()
-        
-        # Skip runs with no events (already identified)
-        if run_events_df.empty:
             continue
             
         # Check for completely missing essential columns that would prevent GLM
@@ -458,6 +461,16 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
                 explicit_start_numeric = float(explicit_start)
                 logging.info(f"Using explicit start time {explicit_start_numeric}s for run {run_number}")
                 run_events_df['onset'] -= explicit_start_numeric
+                
+                # CRITICAL FIX: Validate that onset adjustments don't produce negative values
+                negative_onsets = run_events_df['onset'] < 0
+                if negative_onsets.any():
+                    negative_count = negative_onsets.sum()
+                    min_onset = run_events_df['onset'].min()
+                    raise ValueError(f"Run {run_number}: Onset adjustment produced {negative_count} negative onsets "
+                                   f"(minimum: {min_onset:.3f}s). This indicates misaligned timing metadata. "
+                                   f"Check that run start time {explicit_start_numeric}s is correct for this run.")
+                                   
             except (ValueError, TypeError) as e:
                 raise ValueError(f"Run {run_number}: Cannot convert start time '{explicit_start}' to numeric: {e}. "
                                f"Start times must be numeric values (seconds).")
@@ -904,9 +917,14 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     else:
         logging.warning("Choice regressors not available - skipping choice model")
     
-    # CRITICAL FIX: Safe GLM parameter access for model specifications
+    # CRITICAL FIX: Safe GLM parameter access for model specifications with null fallback
     glm_config = analysis_params.get('glm', {})
     model_specifications = glm_config.get('model_specifications', default_models)
+    
+    # CRITICAL FIX: Handle explicit null/None in config by falling back to defaults
+    if model_specifications is None:
+        model_specifications = default_models
+        logging.info("model_specifications is null in config - using default models")
     
     # CRITICAL FIX: Check for empty model specifications and provide clear error
     if not model_specifications:
