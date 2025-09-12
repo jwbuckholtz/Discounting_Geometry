@@ -20,7 +20,11 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
         bold_imgs: List of BOLD images to get proper dimensions for missing confounds
         
     Returns:
-        List of harmonized confound DataFrames (with None for missing confounds), or None if no confounds
+        List of harmonized confound DataFrames where:
+        - Missing confounds are replaced with zero-filled DataFrames matching BOLD dimensions
+        - All DataFrames have identical columns in the same order
+        - Returns None only if ALL confounds are missing/invalid across all runs
+        - Individual runs with missing confounds get zero-filled matrices for consistency
     """
     # Filter out None entries and empty DataFrames
     valid_confounds = [df for df in confounds_dfs if df is not None and not df.empty]
@@ -39,17 +43,17 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
     # Harmonize each DataFrame, ensuring consistent design matrices across runs
     harmonized_dfs = []
     for i, df in enumerate(confounds_dfs):
+        # CRITICAL FIX: Load each BOLD image only once per run to prevent duplicate I/O
+        bold_entry = bold_imgs[i]
+        if isinstance(bold_entry, (str, os.PathLike)):
+            bold_img = nib.load(bold_entry)
+        else:
+            bold_img = bold_entry
+        n_volumes = bold_img.shape[-1]
+        
         if df is None or df.empty:
             # CRITICAL FIX: Create zero-filled DataFrame to ensure design matrix consistency
             # All runs must have the same confound structure for valid contrast computation
-            bold_entry = bold_imgs[i]
-            if isinstance(bold_entry, (str, os.PathLike)):
-                bold_img = nib.load(bold_entry)
-            else:
-                bold_img = bold_entry
-            n_volumes = bold_img.shape[-1]
-            
-            # Create zero-filled DataFrame with all unified columns
             harmonized_df = pd.DataFrame(
                 data=np.zeros((n_volumes, len(unified_columns))),
                 columns=unified_columns
@@ -65,14 +69,7 @@ def _harmonize_confounds(confounds_dfs: List[pd.DataFrame], bold_imgs: List) -> 
                 harmonized_df[col] = pd.to_numeric(harmonized_df[col], errors='coerce')
             logging.debug(f"Run {i+1}: Converted confound columns to numeric format")
             
-            # CRITICAL: Verify confound row count matches BOLD volumes
-            # Load BOLD image to get volume count (bold_imgs may contain paths, Path objects, or loaded images)
-            bold_entry = bold_imgs[i]
-            if isinstance(bold_entry, (str, os.PathLike)):
-                bold_img = nib.load(bold_entry)
-            else:
-                bold_img = bold_entry
-            n_volumes = bold_img.shape[-1]
+            # CRITICAL: Verify confound row count matches BOLD volumes (using already loaded image)
             n_confound_rows = len(harmonized_df)
             
             if n_confound_rows != n_volumes:
@@ -310,6 +307,14 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         logging.warning(f"None confound entries detected for runs: {none_runs}. "
                        f"These runs will proceed without confound regression.")
     
+    # CRITICAL FIX: Detect duplicate run numbers before creating dictionaries
+    unique_runs = set(run_numbers)
+    if len(unique_runs) != len(run_numbers):
+        duplicates = [run for run in unique_runs if run_numbers.count(run) > 1]
+        raise ValueError(f"Duplicate run numbers detected in single model GLM: {duplicates}. "
+                        f"Each run must have a unique identifier. "
+                        f"Run numbers: {run_numbers}")
+    
     # Create dictionaries keyed by run number for safe access
     bold_imgs_by_run = {run_num: bold_imgs[i] for i, run_num in enumerate(run_numbers)}
     confounds_by_run = {run_num: confounds_dfs[i] for i, run_num in enumerate(run_numbers)}
@@ -341,11 +346,15 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
         except (ValueError, TypeError):
             logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
     
-    # Allow configuration override
+    # Allow configuration override with type checking
     config_n_jobs = analysis_params.get('n_jobs')
     if config_n_jobs is not None:
-        n_jobs = config_n_jobs
-        logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
+        try:
+            n_jobs = int(config_n_jobs)
+            logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid n_jobs configuration value: {config_n_jobs} (type: {type(config_n_jobs)}), using current n_jobs={n_jobs}")
+            logging.warning("n_jobs must be an integer value")
     
     # CRITICAL FIX: Safe parameter lookups with informative error messages
     glm_params = analysis_params.get('glm', {})
