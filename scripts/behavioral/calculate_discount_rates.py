@@ -242,34 +242,51 @@ def _parse_bids_filename(filename: Path) -> Dict[str, str]:
 
 def _find_bids_events_files(onsets_dir: Path, subject_id: str, task: str) -> List[Path]:
     """
-    Robustly find BIDS event files for a specific subject and task.
+    Robustly find event files for a specific subject and task.
     
-    This function uses a systematic approach to prevent glob pattern bugs:
-    1. Use exact BIDS entity matching instead of wildcards
-    2. Validate each file with BIDS parsing
-    3. Return only confirmed matches
+    This function handles both BIDS-formatted and non-BIDS formatted filenames:
+    1. BIDS format: sub-s061_task-discountFix_events.tsv
+    2. Non-BIDS format: s061_discountfix_events.tsv
     
     Args:
         onsets_dir: Directory containing event files
-        subject_id: Full subject ID (e.g., 'sub-01')
+        subject_id: Full subject ID (e.g., 'sub-s061')
         task: Task name (e.g., 'discountFix')
     
     Returns:
         List of Path objects for matching event files
     """
-    subject_label = subject_id.split('-')[-1]  # Extract '01' from 'sub-01'
+    subject_label = subject_id.split('-')[-1]  # Extract 's061' from 'sub-s061'
     
-    # Strategy: Find all event files, then filter with precise BIDS parsing
-    # This avoids glob pattern ambiguities entirely
+    # Strategy: Find all event files, then filter with multiple matching approaches
     all_event_files = list(onsets_dir.glob('*_events.tsv'))
     
     matching_files = []
     for f in all_event_files:
+        # Try BIDS parsing first
         entities = _parse_bids_filename(f)
         
-        # Exact match on subject and task
+        # Check BIDS format: sub-s061_task-discountFix_events.tsv
         if entities.get('sub') == subject_label and entities.get('task') == task:
             matching_files.append(f)
+            continue
+            
+        # Check non-BIDS format: s061_discountfix_events.tsv
+        # Handle case variations in task name
+        task_lower = task.lower()
+        filename_lower = f.name.lower()
+        
+        # Pattern: {subject}_{task}_events.tsv (case-insensitive)
+        expected_pattern = f"{subject_label.lower()}_{task_lower}_events.tsv"
+        if filename_lower == expected_pattern:
+            matching_files.append(f)
+            continue
+            
+        # Also try with 'discount' instead of 'discountFix' for backwards compatibility
+        if task_lower == 'discountfix':
+            alt_pattern = f"{subject_label.lower()}_discount_events.tsv"
+            if filename_lower == alt_pattern:
+                matching_files.append(f)
     
     return sorted(matching_files)
 
