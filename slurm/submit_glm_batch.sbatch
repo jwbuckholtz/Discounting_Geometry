@@ -48,18 +48,20 @@ source slurm/load_python_module.sh
 source "${PROJECT_ROOT}/.venv/bin/activate"
 
 # --- Subject List ---
-# Read behavioral data path from config file
+# Read derivatives directory path from config file
 CONFIG_FILE="$PROJECT_ROOT/config/project_config.yaml"
-BEHAVIORAL_DIR=$(python3 -c "
+DERIVATIVES_DIR=$(python3 -c "
 import yaml
 with open('$CONFIG_FILE', 'r') as f:
     config = yaml.safe_load(f)
-print(config['hpc']['onsets_dir'])
+print(config['hpc']['derivatives_dir'])
 ")
 
-# Create a list of all subject IDs from the config-specified behavioral directory
-# Extract subject IDs from sxx_discountfix_events.tsv filenames
-ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -name "s*_discountfix_events.tsv" -exec basename {} \; | sed 's/_discountfix_events\.tsv$//' | sort))
+BEHAVIORAL_DIR="$DERIVATIVES_DIR/behavioral"
+
+# Create a list of all subject IDs from the derivatives/behavioral directory
+# Look for sub-* directories (matching Python script expectations)
+ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
 # --- Job Logic ---

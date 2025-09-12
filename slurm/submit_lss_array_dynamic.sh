@@ -20,36 +20,40 @@ cd "$PROJECT_ROOT"
 # Ensure logs directory exists before submission
 mkdir -p logs
 
-# Read behavioral data path from config file
+# Read derivatives directory path from config file
 CONFIG_FILE="$PROJECT_ROOT/config/project_config.yaml"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
 fi
 
-# Extract behavioral data path from config (assuming 'hpc' environment)
-# This reads the onsets_dir from the hpc section of the config
-BEHAVIORAL_DIR=$(python3 -c "
+# Extract derivatives directory path from config (assuming 'hpc' environment)
+# Count subjects from derivatives/behavioral directory (where Python scripts look)
+DERIVATIVES_DIR=$(python3 -c "
 import yaml
 with open('$CONFIG_FILE', 'r') as f:
     config = yaml.safe_load(f)
-print(config['hpc']['onsets_dir'])
+print(config['hpc']['derivatives_dir'])
 ")
 
+BEHAVIORAL_DIR="$DERIVATIVES_DIR/behavioral"
+
 if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
-    echo "ERROR: Behavioral data directory from config does not exist: $BEHAVIORAL_DIR"
-    echo "Please check the 'onsets_dir' setting in your config file under the 'hpc' section"
+    echo "ERROR: Behavioral data directory does not exist: $BEHAVIORAL_DIR"
+    echo "Please check the 'derivatives_dir' setting in your config file under the 'hpc' section"
+    echo "Expected to find processed behavioral data in derivatives/behavioral/"
     exit 1
 fi
 
-# Count subjects dynamically from config-specified behavioral directory
-# Look for sxx_discountfix_events.tsv files (where sxx is subject number)
-SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -name "s*_discountfix_events.tsv" | wc -l)
+# Count subjects dynamically from derivatives/behavioral directory
+# Look for sub-* directories (where Python scripts expect processed data)
+SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -type d -name "sub-*" | wc -l)
 
 if [ "$SUBJECT_COUNT" -eq 0 ]; then
-    echo "ERROR: No subject event files found in $BEHAVIORAL_DIR"
-    echo "Looking for files matching pattern: s*_discountfix_events.tsv"
-    echo "Please check that your behavioral data files are in the correct location"
+    echo "ERROR: No subject directories found in $BEHAVIORAL_DIR"
+    echo "Looking for directories matching pattern: sub-*"
+    echo "Please check that your processed behavioral data is in the correct location"
+    echo "Expected structure: derivatives/behavioral/sub-sXXX/sub-sXXX_discounting_with_sv.tsv"
     exit 1
 fi
 
