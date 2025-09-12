@@ -383,8 +383,9 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             n_jobs = int(config_n_jobs)
             # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
             if n_jobs <= 0:
-                logging.warning(f"Invalid n_jobs configuration={n_jobs} (must be >= 1), using current n_jobs={n_jobs}")
+                logging.warning(f"Invalid n_jobs configuration={n_jobs} (must be >= 1), resetting to n_jobs=1")
                 logging.warning("n_jobs must be a positive integer value (>= 1)")
+                n_jobs = 1  # Safe default for single-threaded processing
             else:
                 logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
         except (ValueError, TypeError):
@@ -395,9 +396,20 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     glm_params = analysis_params.get('glm', {})
     
     # Required GLM parameters with defaults
+    # CRITICAL FIX: Handle explicit null values in config by falling back to defaults
+    hrf_model = glm_params.get('hrf_model', 'glover')
+    if hrf_model is None:
+        hrf_model = 'glover'
+        logging.info("hrf_model is null in config - using default 'glover'")
+    
+    drift_model = glm_params.get('drift_model', 'cosine')
+    if drift_model is None:
+        drift_model = 'cosine'
+        logging.info("drift_model is null in config - using default 'cosine'")
+    
     required_glm_params = {
-        'hrf_model': glm_params.get('hrf_model', 'glover'),
-        'drift_model': glm_params.get('drift_model', 'cosine')
+        'hrf_model': hrf_model,
+        'drift_model': drift_model
     }
     
     # Required analysis parameters 
