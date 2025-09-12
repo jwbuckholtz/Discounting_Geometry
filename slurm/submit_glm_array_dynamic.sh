@@ -20,12 +20,34 @@ cd "$PROJECT_ROOT"
 # Ensure logs directory exists before submission
 mkdir -p logs
 
-# Count subjects dynamically from derivatives/behavioral directory
-BEHAVIORAL_DIR="$PROJECT_ROOT/derivatives/behavioral"
+# Read behavioral data path from config file
+CONFIG_FILE="$PROJECT_ROOT/config/project_config.yaml"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+# Extract behavioral data path from config (assuming 'hpc' environment)
+# This reads the onsets_dir from the hpc section of the config
+BEHAVIORAL_DIR=$(python3 -c "
+import yaml
+with open('$CONFIG_FILE', 'r') as f:
+    config = yaml.safe_load(f)
+print(config['hpc']['onsets_dir'])
+")
+
+if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
+    echo "ERROR: Behavioral data directory from config does not exist: $BEHAVIORAL_DIR"
+    echo "Please check the 'onsets_dir' setting in your config file under the 'hpc' section"
+    exit 1
+fi
+
+# Count subjects dynamically from config-specified behavioral directory
 SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -type d -name "sub-*" | wc -l)
 
 if [ "$SUBJECT_COUNT" -eq 0 ]; then
     echo "ERROR: No subjects found in $BEHAVIORAL_DIR"
+    echo "Please check that your behavioral data is in the correct location"
     exit 1
 fi
 

@@ -48,8 +48,16 @@ source slurm/load_python_module.sh
 source "${PROJECT_ROOT}/.venv/bin/activate"
 
 # --- Subject List ---
-# Create a list of all subject IDs from the behavioral directory (keep find command on one line)
-BEHAVIORAL_DIR="$PROJECT_ROOT/derivatives/behavioral"
+# Read behavioral data path from config file
+CONFIG_FILE="$PROJECT_ROOT/config/project_config.yaml"
+BEHAVIORAL_DIR=$(python3 -c "
+import yaml
+with open('$CONFIG_FILE', 'r') as f:
+    config = yaml.safe_load(f)
+print(config['hpc']['onsets_dir'])
+")
+
+# Create a list of all subject IDs from the config-specified behavioral directory
 ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
