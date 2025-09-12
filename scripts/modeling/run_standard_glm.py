@@ -27,6 +27,11 @@ def _harmonize_confounds(confounds_dfs: List[Optional[pd.DataFrame]], bold_imgs:
         - Returns None only if ALL confounds are missing/invalid across all runs
         - Individual runs with missing confounds get zero-filled matrices for consistency
     """
+    # CRITICAL FIX: Validate list lengths to prevent IndexError
+    if len(confounds_dfs) != len(bold_imgs):
+        raise ValueError(f"confounds_dfs and bold_imgs must have the same length. "
+                        f"Got {len(confounds_dfs)} confound entries and {len(bold_imgs)} BOLD images.")
+    
     # CRITICAL FIX: Validate confound entry types before processing
     # Non-DataFrame entries (e.g., strings) pass initial checks but fail later
     for i, entry in enumerate(confounds_dfs):
@@ -307,6 +312,11 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     events_df = subject_data['events_df']
     confounds_dfs = subject_data['confounds_dfs']
     derivatives_dir = subject_data['derivatives_dir']
+    
+    # CRITICAL FIX: Handle None confounds_dfs to prevent TypeError on len()
+    if confounds_dfs is None:
+        confounds_dfs = [None] * len(run_numbers)
+        logging.warning("confounds_dfs is None - creating empty confound list matching run count")
 
     # CRITICAL FIX: Create run-indexed dictionaries to prevent data misalignment
     # Instead of relying on list ordering, use run numbers as keys
@@ -360,7 +370,7 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     
     # CRITICAL FIX: Intelligent CPU allocation for HPC environments
     # Avoid oversubscribing CPUs beyond SLURM allocation
-    n_jobs = -1  # Default: use all cores
+    n_jobs = 1  # Conservative default: single-threaded processing
     
     # Check for SLURM environment and respect CPU allocation
     slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK')
@@ -369,12 +379,12 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
             n_jobs = int(slurm_cpus)
             # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
             if n_jobs <= 0:
-                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=-1")
-                n_jobs = -1
+                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=1")
+                n_jobs = 1
             else:
                 logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for GLM parallel processing")
         except (ValueError, TypeError):
-            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
+            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=1")
     
     # Allow configuration override with type checking
     config_n_jobs = analysis_params.get('n_jobs')
@@ -994,6 +1004,10 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     if model_specifications is None:
         model_specifications = default_models
         logging.info("model_specifications is null in config - using default models")
+    
+    # CRITICAL FIX: Validate model_specifications type before iteration
+    if not isinstance(model_specifications, dict):
+        raise TypeError(f"model_specifications must be a dictionary, got {type(model_specifications)}: {model_specifications}")
     
     # CRITICAL FIX: Check for empty model specifications and provide clear error
     if not model_specifications:

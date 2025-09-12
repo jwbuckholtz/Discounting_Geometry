@@ -62,7 +62,7 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     # CRITICAL FIX: Intelligent CPU allocation for HPC environments
     # Avoid oversubscribing CPUs beyond SLURM allocation
     import os
-    n_jobs = -1  # Default: use all cores
+    n_jobs = 1  # Conservative default: single-threaded processing
     
     # Check for SLURM environment and respect CPU allocation
     slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK')
@@ -71,12 +71,12 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
             n_jobs = int(slurm_cpus)
             # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
             if n_jobs <= 0:
-                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=-1")
-                n_jobs = -1
+                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=1")
+                n_jobs = 1
             else:
                 logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for LSS parallel processing")
         except (ValueError, TypeError):
-            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
+            logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=1")
     
     # Allow configuration override with type checking
     config_n_jobs = analysis_params.get('n_jobs')
