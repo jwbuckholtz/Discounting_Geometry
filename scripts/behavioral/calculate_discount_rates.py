@@ -66,7 +66,14 @@ def _validate_and_prepare_choice_data(data: pd.DataFrame) -> pd.DataFrame:
     # This targets the rows that failed numeric conversion
     unmapped_idx = processed_choice.isnull()
     if unmapped_idx.any():
-        choice_map = {'larger_later': 1, 'smaller_sooner': 0}
+        choice_map = {
+            'larger_later': 1, 
+            'smaller_sooner': 0,
+            'true': 1,      # Handle boolean-style values
+            'false': 0,     # Handle boolean-style values
+            'yes': 1,       # Additional common variants
+            'no': 0
+        }
         mapped_strings = data.loc[unmapped_idx, 'choice_original'].str.strip().str.lower().map(choice_map)
         processed_choice.loc[unmapped_idx] = mapped_strings
 
