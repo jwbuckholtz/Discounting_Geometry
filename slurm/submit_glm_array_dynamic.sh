@@ -43,11 +43,13 @@ if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
 fi
 
 # Count subjects dynamically from config-specified behavioral directory
-SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -type d -name "sub-*" | wc -l)
+# Look for sxx_discountfix_events.tsv files (where sxx is subject number)
+SUBJECT_COUNT=$(find "$BEHAVIORAL_DIR" -maxdepth 1 -name "s*_discountfix_events.tsv" | wc -l)
 
 if [ "$SUBJECT_COUNT" -eq 0 ]; then
-    echo "ERROR: No subjects found in $BEHAVIORAL_DIR"
-    echo "Please check that your behavioral data is in the correct location"
+    echo "ERROR: No subject event files found in $BEHAVIORAL_DIR"
+    echo "Looking for files matching pattern: s*_discountfix_events.tsv"
+    echo "Please check that your behavioral data files are in the correct location"
     exit 1
 fi
 

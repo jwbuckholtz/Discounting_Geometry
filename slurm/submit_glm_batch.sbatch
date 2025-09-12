@@ -58,7 +58,8 @@ print(config['hpc']['onsets_dir'])
 ")
 
 # Create a list of all subject IDs from the config-specified behavioral directory
-ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
+# Extract subject IDs from sxx_discountfix_events.tsv filenames
+ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -name "s*_discountfix_events.tsv" -exec basename {} \; | sed 's/_discountfix_events\.tsv$//' | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
 # --- Job Logic ---
