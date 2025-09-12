@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import nibabel as nib
 import os
+from pathlib import Path
 from nilearn.glm.first_level import FirstLevelModel
 from scripts.utils import load_modeling_data, load_config, setup_logging
 from typing import Dict, Any, List, Optional
@@ -26,6 +27,12 @@ def _harmonize_confounds(confounds_dfs: List[Optional[pd.DataFrame]], bold_imgs:
         - Returns None only if ALL confounds are missing/invalid across all runs
         - Individual runs with missing confounds get zero-filled matrices for consistency
     """
+    # CRITICAL FIX: Validate confound entry types before processing
+    # Non-DataFrame entries (e.g., strings) pass initial checks but fail later
+    for i, entry in enumerate(confounds_dfs):
+        if entry is not None and not isinstance(entry, pd.DataFrame):
+            raise TypeError(f"Confound entry {i} must be None or pd.DataFrame, got {type(entry)}: {entry}")
+    
     # Filter out None entries and empty DataFrames
     valid_confounds = [df for df in confounds_dfs if df is not None and not df.empty]
     
@@ -67,6 +74,21 @@ def _harmonize_confounds(confounds_dfs: List[Optional[pd.DataFrame]], bold_imgs:
             # Non-numeric confound columns can cause downstream errors during model fitting
             for col in harmonized_df.columns:
                 harmonized_df[col] = pd.to_numeric(harmonized_df[col], errors='coerce')
+            
+            # CRITICAL FIX: Handle NaNs created by numeric coercion
+            # NaNs in confounds can crash GLM fitting or bias parameter estimates
+            nan_counts = harmonized_df.isnull().sum()
+            total_nans = nan_counts.sum()
+            
+            if total_nans > 0:
+                # Log which columns have NaNs for debugging
+                nan_columns = nan_counts[nan_counts > 0]
+                logging.warning(f"Run {i+1}: Found {total_nans} NaN values after numeric conversion in columns: {dict(nan_columns)}")
+                
+                # Fill NaNs with zeros (conservative approach for confounds)
+                harmonized_df = harmonized_df.fillna(0.0)
+                logging.info(f"Run {i+1}: Filled {total_nans} NaN values with zeros for GLM stability")
+            
             logging.debug(f"Run {i+1}: Converted confound columns to numeric format")
             
             # CRITICAL: Verify confound row count matches BOLD volumes (using already loaded image)
@@ -323,8 +345,11 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
 
     logging.info(f"--- Running {model_name} GLM for {subject_id} with regressors: {target_regressors} ---")
     
+    # CRITICAL FIX: Ensure derivatives_dir is a Path object to prevent TypeError on path arithmetic
+    derivatives_path = Path(derivatives_dir)
+    
     # Create model-specific output directory
-    output_dir = derivatives_dir / 'standard_glm' / subject_id / f'model-{model_name}'
+    output_dir = derivatives_path / 'standard_glm' / subject_id / f'model-{model_name}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # CRITICAL FIX: Safe access to analysis_params with informative error
@@ -342,7 +367,12 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     if slurm_cpus:
         try:
             n_jobs = int(slurm_cpus)
-            logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for GLM parallel processing")
+            # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
+            if n_jobs <= 0:
+                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=-1")
+                n_jobs = -1
+            else:
+                logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for GLM parallel processing")
         except (ValueError, TypeError):
             logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
     
@@ -351,7 +381,12 @@ def run_single_model_glm(subject_data: Dict[str, Any], params: Dict[str, Any], m
     if config_n_jobs is not None:
         try:
             n_jobs = int(config_n_jobs)
-            logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
+            # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
+            if n_jobs <= 0:
+                logging.warning(f"Invalid n_jobs configuration={n_jobs} (must be >= 1), using current n_jobs={n_jobs}")
+                logging.warning("n_jobs must be a positive integer value (>= 1)")
+            else:
+                logging.info(f"Using configured n_jobs={n_jobs} for GLM parallel processing")
         except (ValueError, TypeError):
             logging.warning(f"Invalid n_jobs configuration value: {config_n_jobs} (type: {type(config_n_jobs)}), using current n_jobs={n_jobs}")
             logging.warning("n_jobs must be an integer value")
@@ -799,6 +834,28 @@ def run_standard_glm_for_subject(subject_data: Dict[str, Any], params: Dict[str,
     except (ValueError, TypeError) as e:
         raise ValueError(f"Cannot convert events run column to integer: {e}. "
                         f"Run values: {events_df['run'].unique()}")
+    
+    # CRITICAL FIX: Detect orphan runs in events that are missing from metadata
+    # Events with run IDs not in run_numbers are silently ignored, causing data loss
+    event_runs = set(events_df['run'].unique())
+    metadata_runs = set(run_numbers_int)
+    orphan_runs = event_runs - metadata_runs
+    
+    if orphan_runs:
+        orphan_count = sum(events_df['run'].isin(orphan_runs))
+        logging.warning(f"Found {len(orphan_runs)} orphan run(s) in events but missing from metadata: {sorted(orphan_runs)}")
+        logging.warning(f"These runs contain {orphan_count} events that will be ignored")
+        logging.warning(f"Events run IDs: {sorted(event_runs)}")
+        logging.warning(f"Metadata run IDs: {sorted(metadata_runs)}")
+        
+        # Option: Remove orphan events to prevent confusion
+        events_df = events_df[~events_df['run'].isin(orphan_runs)].copy()
+        logging.info(f"Removed {orphan_count} events from orphan runs - {len(events_df)} events remaining")
+        
+        if len(events_df) == 0:
+            raise ValueError("All events belong to orphan runs not present in metadata - cannot proceed")
+    else:
+        logging.debug("All event runs are present in metadata - no orphan runs detected")
     
     # 1. DURATION IMPROVEMENT: Use reaction time instead of fixed 4s duration
     if 'response_time' in events_df.columns:

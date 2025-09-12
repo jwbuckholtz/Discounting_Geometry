@@ -69,15 +69,29 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     if slurm_cpus:
         try:
             n_jobs = int(slurm_cpus)
-            logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for LSS parallel processing")
+            # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
+            if n_jobs <= 0:
+                logging.warning(f"Invalid SLURM_CPUS_PER_TASK={n_jobs} (must be >= 1), using default n_jobs=-1")
+                n_jobs = -1
+            else:
+                logging.info(f"Using SLURM_CPUS_PER_TASK={n_jobs} for LSS parallel processing")
         except (ValueError, TypeError):
             logging.warning(f"Invalid SLURM_CPUS_PER_TASK value: {slurm_cpus}, using default n_jobs=-1")
     
-    # Allow configuration override
+    # Allow configuration override with type checking
     config_n_jobs = analysis_params.get('n_jobs')
     if config_n_jobs is not None:
-        n_jobs = config_n_jobs
-        logging.info(f"Using configured n_jobs={n_jobs} for LSS parallel processing")
+        try:
+            n_jobs = int(config_n_jobs)
+            # CRITICAL FIX: Validate n_jobs is positive to prevent FirstLevelModel crashes
+            if n_jobs <= 0:
+                logging.warning(f"Invalid n_jobs configuration={n_jobs} (must be >= 1), using current n_jobs={n_jobs}")
+                logging.warning("n_jobs must be a positive integer value (>= 1)")
+            else:
+                logging.info(f"Using configured n_jobs={n_jobs} for LSS parallel processing")
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid n_jobs configuration value: {config_n_jobs} (type: {type(config_n_jobs)}), using current n_jobs={n_jobs}")
+            logging.warning("n_jobs must be an integer value")
     
     # CRITICAL FIX: Safe parameter lookups with informative error messages
     glm_params = analysis_params.get('glm', {})
@@ -157,8 +171,11 @@ def run_lss_for_subject(subject_data: Dict[str, Any], params: Dict[str, Any]) ->
     # Concatenate all beta maps into a single 4D NIfTI image
     beta_maps_img = image.concat_imgs(all_beta_maps)
 
+    # CRITICAL FIX: Ensure derivatives_dir is a Path object to prevent TypeError on path arithmetic
+    derivatives_path = Path(derivatives_dir)
+    
     # Save the beta maps NIfTI image
-    output_dir = derivatives_dir / 'lss_betas' / subject_id
+    output_dir = derivatives_path / 'lss_betas' / subject_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_filename = output_dir / f"{subject_id}_lss_beta_maps.nii.gz"
     beta_maps_img.to_filename(output_filename)
