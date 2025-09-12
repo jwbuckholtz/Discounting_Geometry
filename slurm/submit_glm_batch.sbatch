@@ -17,19 +17,13 @@ set -e  # Exit immediately if any command fails
 # #SBATCH --array=0-102  # REMOVED: Use dynamic submission instead
 
 # --- Environment Validation (BEFORE any usage) ---
-# Require all paths via environment variables for portability
-# Users must set these before submitting jobs
+# Require PROJECT_ROOT via environment variable for portability
+# Users must set this before submitting jobs
 : ${PROJECT_ROOT:?ERROR: PROJECT_ROOT not set - export PROJECT_ROOT=/path/to/project}
-: ${BEHAVIORAL_DIR:?ERROR: BEHAVIORAL_DIR not set - export BEHAVIORAL_DIR=/path/to/behavioral/data}
 
 # Verify directories exist before proceeding
 if [[ ! -d "$PROJECT_ROOT" ]]; then
     echo "ERROR: PROJECT_ROOT directory does not exist: $PROJECT_ROOT"
-    exit 1
-fi
-
-if [[ ! -d "$BEHAVIORAL_DIR" ]]; then
-    echo "ERROR: BEHAVIORAL_DIR directory does not exist: $BEHAVIORAL_DIR"
     exit 1
 fi
 
@@ -55,6 +49,7 @@ source "${PROJECT_ROOT}/.venv/bin/activate"
 
 # --- Subject List ---
 # Create a list of all subject IDs from the behavioral directory (keep find command on one line)
+BEHAVIORAL_DIR="$PROJECT_ROOT/derivatives/behavioral"
 ALL_SUBJECTS=($(find "${BEHAVIORAL_DIR}" -maxdepth 1 -type d -name "sub-*" -exec basename {} \; | sort))
 NUM_SUBJECTS=${#ALL_SUBJECTS[@]}
 
